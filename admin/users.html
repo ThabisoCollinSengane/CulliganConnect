@@ -161,8 +161,6 @@
       saveBtn.disabled = true;
       saveBtn.textContent = 'Creating…';
 
-      const { data: { session } } = await supabase.auth.getSession();
-
       const payload = {
         full_name: document.getElementById('full-name').value.trim(),
         email: document.getElementById('new-email').value.trim(),
@@ -172,18 +170,16 @@
       };
 
       try {
-        const res = await fetch('/api/admin/create-user', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify(payload),
+        const { data: result, error: fnError } = await supabase.functions.invoke('create-agent', {
+          body: payload,
         });
-        const result = await res.json();
 
-        if (!res.ok) {
-          throw new Error(result.error || 'Failed to create agent');
+        if (fnError) {
+          const message = (await fnError.context?.json?.().catch(() => null))?.error || fnError.message;
+          throw new Error(message || 'Failed to create agent');
+        }
+        if (result?.error) {
+          throw new Error(result.error);
         }
 
         modal.classList.add('hidden');

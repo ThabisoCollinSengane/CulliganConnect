@@ -620,3 +620,64 @@ test user and its rows.
 Deployment note: the `culliganconnect` Vercel project was created via direct file upload (not
 Git-connected), so `git push` alone does not deploy it — someone needs to click "Connect Git
 Repository" on the Vercel project and point it at this repo/branch for pushes to auto-deploy.
+(Resolved 2026-07-10: Git is now connected; pushes to `main` deploy to production automatically.)
+
+---
+
+🔧 v5 Update – Auth bootstrap bug, agent creation moved to an Edge Function, RLS perf (2026-07-11)
+
+**Root cause of "incorrect email or password" that no password reset fixed:** bootstrapping the
+admin account with a raw `INSERT INTO auth.users` left `confirmation_token` and sibling token
+columns (`recovery_token`, `email_change_token_new`, `email_change`,
+`email_change_token_current`, `phone_change`, `phone_change_token`, `reauthentication_token`) as
+`NULL` instead of `''`. GoTrue's Go code cannot scan `NULL` into those fields and crashes with a
+500 *before it ever checks the password* — the frontend shows a generic "Incorrect email or
+password" for any failure, which is why no amount of password-resetting fixed it. Confirmed via
+`get_logs(service: 'auth')`, which showed `error finding user: sql: Scan error on column index
+3, name "confirmation_token": converting NULL to string is unsupported` on every attempt.
+**If you ever need to bootstrap another user via raw SQL instead of `auth.admin.createUser()`,
+explicitly set all the `character varying` columns with `column_default IS NULL` to `''`,** not
+just `encrypted_password`/`email`/etc. Users created through the `create-agent` Edge Function
+(see below) don't have this problem — they go through Supabase's own Go code, which sets these
+correctly.
+
+**Agent creation moved from a Vercel serverless function to a Supabase Edge Function**
+(`supabase/functions/create-agent/index.ts`, called from `admin/users.html` via
+`supabase.functions.invoke('create-agent', ...)`). The Vercel version
+(`api/admin/create-user.js`, now deleted) needed `SUPABASE_SERVICE_ROLE_KEY` set as a Vercel
+environment variable, which nobody with access to this session could retrieve or set (by
+design — MCP tooling never exposes the service-role key). Supabase Edge Functions get
+`SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` injected automatically for
+functions in the same project, so this sidesteps the problem entirely — zero Vercel
+configuration required. The app is now a pure static site; `package.json` and `api/` were
+removed since nothing server-side runs on Vercel anymore. Deploy the function with
+`supabase functions deploy create-agent --project-ref gitiijehmmovfopgzmtl`.
+
+**Two real advisor findings, both fixed and re-verified:**
+· The v3 "hardening" migration (`revoke execute ... from anon, authenticated`) didn't actually
+  close the hole — Postgres grants `EXECUTE` to `PUBLIC` by default on function creation, and
+  `anon`/`authenticated` inherit through `PUBLIC` regardless of a role-specific revoke. Checked
+  `pg_proc.proacl` directly to confirm; `20260711110000`-adjacent migration
+  (`harden_automation_functions_v2` applied live, folded into `20260711110000_performance_hardening.sql`
+  going forward) revokes from `PUBLIC` instead, which actually works — verified by re-checking
+  `proacl` afterward.
+· `auth_rls_initplan` on ~20 policies across every table: calling `auth.uid()`/`auth.role()`
+  directly in a policy re-evaluates it per row; wrapping as `(select auth.uid())` makes Postgres
+  treat it as a stable initplan evaluated once per query. Rewrote every non-`is_admin()`-only
+  policy with `ALTER POLICY ... USING (...) WITH CHECK (...)` (`is_admin()` itself was already
+  fine — the wrapping happens inside the function). Also added the 18 missing FK covering
+  indexes the advisor flagged.
+· Not fixed: `multiple_permissive_policies` (~145 advisor entries) — every table has a separate
+  `agents_own_X` + `admins_all_X` policy for the same command, which Postgres evaluates as an OR
+  instead of a single combined USING clause. Correct, just not maximally efficient. Left as-is
+  deliberately — consolidating ~20 policy pairs is a real refactor with real risk of breaking
+  access for a 30-person internal tool with negligible query volume; not worth it unless this
+  actually shows up as a bottleneck. `auth_leaked_password_protection` (HaveIBeenPwned checking)
+  is also still off — it's an Auth-service config toggle, not reachable via SQL/migrations or
+  any tool in this session; someone with dashboard access can flip it under Authentication →
+  Policies if wanted.
+
+As with the v4 changes, the RLS policy rewrite was re-verified against **real RLS enforcement**
+(throwaway test agent + `set local role authenticated` + simulated JWT claims), not just
+applied — every rewritten policy was exercised (profile visibility, case create, note insert,
+reminder insert) before and after, then the test user was deleted.

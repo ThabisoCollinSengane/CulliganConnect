@@ -5,33 +5,48 @@ See `.claude/CLAUDE.md` for the full product spec.
 
 ## Stack
 
-Vanilla HTML/CSS/JS + Vercel serverless functions (`/api`) + Supabase (Postgres, Auth, RLS).
-No build step for the frontend — pages import `@supabase/supabase-js` straight from a CDN.
+Vanilla HTML/CSS/JS (no build step, no framework) + Supabase (Postgres, Auth, RLS, Edge
+Functions). Deployed on Vercel as a **static site** — there's no server component to configure.
 
 ## Project structure
 
 ```
-index.html            Login / landing page
-admin/                 Admin-only pages (dashboard, agents, setup)
-css/styles.css          Culligan blue theme
-js/                     Shared client-side modules (Supabase client, auth guard)
-api/admin/create-user.js  Serverless endpoint for creating agent accounts (uses the service-role key)
-supabase/migrations/    SQL migrations (schema, RLS policies, seed data)
+index.html               Login page (single login for both agents and admins)
+admin/                     Admin-only pages (dashboard, agents, setup)
+agent/                     Agent-facing pages (My Day, case list, case detail)
+css/styles.css              Culligan blue theme
+js/                          Shared client-side modules (Supabase client, auth guard, helpers)
+supabase/migrations/        SQL migrations (schema, RLS policies, triggers, seed data)
+supabase/functions/         Supabase Edge Functions (privileged operations)
 ```
 
 ## Supabase project
 
 - Project: `CulliganConnect` (`gitiijehmmovfopgzmtl`, eu-west-1)
-- Schema, RLS policies and seed data (departments, case types, service centres, escalation
-  reasons/templates) are defined in `supabase/migrations/`. Run them with the Supabase CLI
-  (`supabase db push`) against a fresh project, or apply them via the Supabase MCP/dashboard.
+- Schema, RLS policies, triggers and seed data (departments, case types, service centres,
+  escalation reasons/templates) are defined in `supabase/migrations/`. Run them with the
+  Supabase CLI (`supabase db push`) against a fresh project, or apply them via the Supabase
+  MCP/dashboard.
 - The anon/publishable key is safe to ship client-side (`js/supabaseClient.js`) — every table
   has RLS enabled, so access is enforced server-side regardless of what key the browser holds.
 
-## Environment variables (Vercel)
+## Privileged operations (Edge Functions)
 
-Set these in the Vercel project settings — see `.env.example`. `SUPABASE_SERVICE_ROLE_KEY` must
-never be committed; it bypasses RLS and is only used inside `/api` serverless functions.
+`supabase/functions/create-agent` creates an agent's Auth account + profile row. It's called
+from `admin/users.html` via `supabase.functions.invoke('create-agent', ...)`. This runs as a
+Supabase Edge Function rather than a Vercel serverless function specifically so the
+service-role key never needs to be copied into Vercel's environment variables — Supabase
+injects it automatically for functions in the same project. Deploy changes with:
+
+```
+supabase functions deploy create-agent --project-ref gitiijehmmovfopgzmtl
+```
+
+## Login
+
+Everyone signs in on the same page (`index.html`). After authenticating, the page reads the
+account's `profiles.role` and redirects: `admin` → `/admin/index.html`, `agent` →
+`/agent/index.html`.
 
 ## Default admin
 
@@ -41,6 +56,5 @@ be rotated by the admin on first login.
 
 ## Status
 
-Phase 1 (database + auth) and the admin shell (dashboard, agent management, departments/case
-types/service centres/escalation reasons setup) are in place. Case list/detail, escalation
-timers, reminders, and the agent-facing dashboard are next.
+Phase 1 (database + auth), the admin panel, and the agent-facing dashboard/case list/case
+detail are in place. Ranking/reports and CSV/PDF export are next.
