@@ -583,3 +583,40 @@ migration, so the database — not the frontend — is the source of truth for t
 · All of the above was smoke-tested end-to-end against the live Supabase project (insert →
   escalate → note → close → verify history/audit rows → `send_eod_stats` → verify notification →
   cleanup) before being considered done, not just applied and assumed correct.
+
+---
+
+👷 v4 Update – Agent Frontend (2026-07-11)
+
+Built the agent-facing screens: `agent/index.html` (My Day — notifications, today's personal
+stats, mood check-in, priority case list sorted by escalation risk), `agent/cases.html`
+(searchable/filterable case list + "New case" form with the spreadsheet's "check before you
+escalate" account-history hint), `agent/case.html` (case detail: status/escalation controls,
+escalation email template copy-to-clipboard with `{TOKEN}` substitution, notes with @mention
+tagging, reminders, status history). Shared logic lives in `js/caseHelpers.js` (status badges,
+escalation countdown colour bands, template token filling, clipboard copy).
+
+Building this surfaced two real RLS gaps in the v2/v3 schema that would have silently broken
+the agent UI, both fixed in `20260711100500_fix_agent_frontend_rls_gaps.sql`:
+· `cases` had no INSERT policy for agents — only admins could create cases. Added
+  `agents_create_own_cases` (agents may insert cases where `assigned_to = auth.uid()`).
+· `profiles` only allowed reading your own row — colleague names in note attribution, case
+  history, and the @mention tag-picker would all render blank. Added
+  `authenticated_read_profiles` (any signed-in user may read all profiles) — acceptable for a
+  ~30-person internal team where the source spreadsheet was already fully shared.
+
+Also added `20260711100000_notify_case_mentions.sql`: a trigger (`notify_case_mention`) that
+fires a `notifications` row when someone is tagged via `case_mentions` — the table existed
+before this but nothing was creating the notification.
+
+Unlike the DDL-only migrations, these RLS/trigger fixes were verified against **real RLS
+enforcement**, not just applied: created a throwaway `agent`-role test user, ran
+`set local role authenticated` + `set_config('request.jwt.claims', ...)` to simulate its actual
+PostgREST session (the Supabase MCP connection is otherwise a superuser that bypasses RLS
+entirely, so testing via that connection directly would prove nothing), exercised case
+create/read, note insert, reminder insert, and mention→notification end-to-end, then deleted the
+test user and its rows.
+
+Deployment note: the `culliganconnect` Vercel project was created via direct file upload (not
+Git-connected), so `git push` alone does not deploy it — someone needs to click "Connect Git
+Repository" on the Vercel project and point it at this repo/branch for pushes to auto-deploy.

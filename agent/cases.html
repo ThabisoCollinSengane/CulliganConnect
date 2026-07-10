@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cases – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect</div>
+    <nav>
+      <a href="/agent/index.html">My Day</a>
+      <a href="/agent/cases.html" class="active">Cases</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/agent/index.html">My Day</a>
+      <a href="/agent/cases.html" class="active">All Cases</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <div class="toolbar">
+          <h2 style="margin:0;">My Cases</h2>
+          <button class="btn" id="new-case-btn">+ New case</button>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+          <input id="search-input" placeholder="Search case #, account #, or customer name…" style="flex:2; min-width:220px;" />
+          <select id="status-filter" style="flex:1; min-width:160px;">
+            <option value="">All statuses</option>
+            <option value="new">New</option>
+            <option value="pending">Pending</option>
+            <option value="escalated">Escalated</option>
+            <option value="awaiting_response">Awaiting Response</option>
+            <option value="resolved">Resolved</option>
+            <option value="closed">Closed</option>
+          </select>
+          <select id="type-filter" style="flex:1; min-width:160px;"></select>
+        </div>
+        <table id="cases-table">
+          <thead><tr><th>Case #</th><th>Account #</th><th>Customer</th><th>Type</th><th>Status</th><th>Escalation</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop hidden" id="modal-backdrop">
+    <div class="modal">
+      <h3>New case</h3>
+      <form id="new-case-form">
+        <div class="form-row">
+          <label>Account number</label>
+          <input id="nc-account" />
+          <p class="hint" id="account-history-hint"></p>
+        </div>
+        <div class="form-row"><label>Task number</label><input id="nc-task" /></div>
+        <div class="form-row"><label>Work order number</label><input id="nc-workorder" /></div>
+        <div class="form-row"><label>Customer name</label><input id="nc-customer-name" /></div>
+        <div class="form-row"><label>Customer phone</label><input id="nc-customer-phone" /></div>
+        <div class="form-row"><label>Customer email</label><input id="nc-customer-email" type="email" /></div>
+        <div class="form-row">
+          <label>Case type</label>
+          <select id="nc-case-type"></select>
+        </div>
+        <div class="form-row">
+          <label>Priority</label>
+          <select id="nc-priority">
+            <option value="normal" selected>Normal</option>
+            <option value="high">High</option>
+            <option value="urgent">Urgent</option>
+          </select>
+        </div>
+        <div class="form-row"><label>SLA date</label><input id="nc-sla-date" type="date" /></div>
+        <p class="error-text hidden" id="nc-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="nc-cancel">Cancel</button>
+          <button type="submit" class="btn" id="nc-save">Create case</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
+
+    const profile = await requireRole(['agent', 'admin']);
+    let caseTypes = [];
+
+    if (profile) {
+      await loadCaseTypes();
+      await loadCases();
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    document.getElementById('search-input').addEventListener('input', debounce(loadCases, 300));
+    document.getElementById('status-filter').addEventListener('change', loadCases);
+    document.getElementById('type-filter').addEventListener('change', loadCases);
+
+    function debounce(fn, ms) {
+      let t;
+      return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+    }
+
+    async function loadCaseTypes() {
+      const { data } = await supabase.from('case_types').select('id, name').eq('is_active', true).order('name');
+      caseTypes = data || [];
+      document.getElementById('type-filter').innerHTML = '<option value="">All types</option>' +
+        caseTypes.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+      document.getElementById('nc-case-type').innerHTML =
+        caseTypes.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+    }
+
+    async function loadCases() {
+      const search = document.getElementById('search-input').value.trim();
+      const status = document.getElementById('status-filter').value;
+      const typeId = document.getElementById('type-filter').value;
+
+      let query = supabase
+        .from('cases')
+        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, case_types(name)')
+        .eq('assigned_to', profile.id)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (status) query = query.eq('status', status);
+      if (typeId) query = query.eq('case_type_id', typeId);
+      if (search) query = query.or(`case_number.ilike.%${search}%,account_number.ilike.%${search}%,customer_name.ilike.%${search}%`);
+
+      const { data, error } = await query;
+      const tbody = document.querySelector('#cases-table tbody');
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="6" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="hint">No cases found.</td></tr>';
+        return;
+      }
+
+      for (const c of data) {
+        const countdown = escalationCountdown(c.escalation_expires_at);
+        const escalationCell = countdown
+          ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
+          : '<span class="hint">—</span>';
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.innerHTML = `
+          <td>${c.case_number}</td>
+          <td>${c.account_number || '—'}</td>
+          <td>${c.customer_name || '—'}</td>
+          <td>${c.case_types?.name || '—'}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td>${escalationCell}</td>
+        `;
+        tr.addEventListener('click', () => {
+          window.location.href = `/agent/case.html?id=${c.id}`;
+        });
+        tbody.appendChild(tr);
+      }
+    }
+
+    const modal = document.getElementById('modal-backdrop');
+    document.getElementById('new-case-btn').addEventListener('click', () => modal.classList.remove('hidden'));
+    document.getElementById('nc-cancel').addEventListener('click', () => modal.classList.add('hidden'));
+
+    document.getElementById('nc-account').addEventListener('blur', async () => {
+      const account = document.getElementById('nc-account').value.trim();
+      const hint = document.getElementById('account-history-hint');
+      hint.textContent = '';
+      if (!account) return;
+
+      const { data } = await supabase
+        .from('cases')
+        .select('case_number, status, created_at')
+        .eq('account_number', account)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (data && data.length > 0) {
+        const { count } = await supabase.from('cases').select('id', { count: 'exact', head: true }).eq('account_number', account);
+        hint.textContent = `⚠ ${count} prior case(s) for this account. Latest: ${data[0].case_number} (${data[0].status}), ${new Date(data[0].created_at).toLocaleDateString()}.`;
+      }
+    });
+
+    document.getElementById('new-case-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('nc-error');
+      errorEl.classList.add('hidden');
+      const saveBtn = document.getElementById('nc-save');
+      saveBtn.disabled = true;
+
+      const { error } = await supabase.from('cases').insert({
+        account_number: document.getElementById('nc-account').value.trim() || null,
+        task_number: document.getElementById('nc-task').value.trim() || null,
+        work_order_number: document.getElementById('nc-workorder').value.trim() || null,
+        customer_name: document.getElementById('nc-customer-name').value.trim() || null,
+        customer_phone: document.getElementById('nc-customer-phone').value.trim() || null,
+        customer_email: document.getElementById('nc-customer-email').value.trim() || null,
+        case_type_id: document.getElementById('nc-case-type').value || null,
+        priority: document.getElementById('nc-priority').value,
+        sla_date: document.getElementById('nc-sla-date').value || null,
+        assigned_to: profile.id,
+        status: 'new',
+        source: 'manual',
+      });
+
+      saveBtn.disabled = false;
+
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      modal.classList.add('hidden');
+      document.getElementById('new-case-form').reset();
+      await loadCases();
+    });
+  </script>
+</body>
+</html>
