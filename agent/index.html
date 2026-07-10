@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>My Day – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect</div>
+    <nav>
+      <a href="/agent/index.html" class="active">My Day</a>
+      <a href="/agent/cases.html">Cases</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/agent/index.html" class="active">My Day</a>
+      <a href="/agent/cases.html">All Cases</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <h2 id="welcome-msg">Welcome</h2>
+        <p class="motivation-line" id="welcome-motivation"></p>
+        <p class="hint">Your priority list, today's numbers, and anything waiting on you.</p>
+      </div>
+
+      <div class="grid stats" id="stats-grid">
+        <div class="stat-tile"><div class="value" id="stat-closed">–</div><div class="label">Closed today</div></div>
+        <div class="stat-tile"><div class="value" id="stat-interacted">–</div><div class="label">Interacted today</div></div>
+        <div class="stat-tile"><div class="value" id="stat-escalated">–</div><div class="label">Escalated today</div></div>
+        <div class="stat-tile"><div class="value" id="stat-open">–</div><div class="label">Open cases assigned</div></div>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">How's your day going?</h3>
+        </div>
+        <div id="mood-picker" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+        <p class="success-text hidden" id="mood-saved">Saved — thanks for checking in.</p>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">Notifications</h3>
+        </div>
+        <div id="notifications-list"></div>
+      </div>
+
+      <div class="card">
+        <h3>My Day – priority cases</h3>
+        <table id="my-day-table">
+          <thead><tr><th>Case #</th><th>Customer</th><th>Status</th><th>Escalation</th><th>SLA</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
+    import { timeGreeting, motivationalLine } from '/js/greeting.js';
+
+    const profile = await requireRole(['agent', 'admin']);
+    if (profile) {
+      document.getElementById('welcome-msg').textContent = timeGreeting(profile.full_name || profile.email);
+      motivationalLine(supabase, profile.id).then(line => {
+        document.getElementById('welcome-motivation').textContent = line;
+      });
+      renderMoodPicker();
+      await Promise.all([
+        loadTodayStats(),
+        loadNotifications(),
+        loadMyDay(),
+        loadTodayMood(),
+      ]);
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    const MOODS = [
+      { key: 'great', label: '😄 Great' },
+      { key: 'good', label: '🙂 Good' },
+      { key: 'okay', label: '😐 Okay' },
+      { key: 'stressed', label: '😣 Stressed' },
+      { key: 'overwhelmed', label: '🥵 Overwhelmed' },
+    ];
+
+    function renderMoodPicker() {
+      const wrap = document.getElementById('mood-picker');
+      wrap.innerHTML = MOODS.map(m =>
+        `<button type="button" class="btn secondary mood-btn" data-mood="${m.key}">${m.label}</button>`
+      ).join('');
+
+      wrap.querySelectorAll('.mood-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const { error } = await supabase.from('agent_mood_log').upsert({
+            agent_id: profile.id,
+            mood: btn.dataset.mood,
+            logged_at: new Date().toISOString().slice(0, 10),
+          }, { onConflict: 'agent_id,logged_at' });
+
+          if (!error) {
+            highlightMood(btn.dataset.mood);
+            const saved = document.getElementById('mood-saved');
+            saved.classList.remove('hidden');
+          }
+        });
+      });
+    }
+
+    function highlightMood(mood) {
+      document.querySelectorAll('.mood-btn').forEach(btn => {
+        btn.classList.toggle('secondary', btn.dataset.mood !== mood);
+      });
+    }
+
+    async function loadTodayMood() {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data } = await supabase
+        .from('agent_mood_log')
+        .select('mood')
+        .eq('agent_id', profile.id)
+        .eq('logged_at', today)
+        .maybeSingle();
+      if (data) {
+        highlightMood(data.mood);
+        document.getElementById('mood-saved').classList.remove('hidden');
+      }
+    }
+
+    async function loadTodayStats() {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const iso = todayStart.toISOString();
+
+      const [{ count: closed }, { data: notes }, { count: escalated }, { count: open }] = await Promise.all([
+        supabase.from('cases').select('id', { count: 'exact', head: true })
+          .eq('assigned_to', profile.id).gte('closed_at', iso),
+        supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
+          .eq('cases.assigned_to', profile.id).gte('created_at', iso),
+        supabase.from('cases').select('id', { count: 'exact', head: true })
+          .eq('assigned_to', profile.id).gte('escalated_at', iso),
+        supabase.from('cases').select('id', { count: 'exact', head: true })
+          .eq('assigned_to', profile.id).not('status', 'in', '("closed","resolved")'),
+      ]);
+
+      document.getElementById('stat-closed').textContent = closed ?? 0;
+      document.getElementById('stat-interacted').textContent = new Set((notes || []).map(n => n.case_id)).size;
+      document.getElementById('stat-escalated').textContent = escalated ?? 0;
+      document.getElementById('stat-open').textContent = open ?? 0;
+    }
+
+    async function loadNotifications() {
+      const { data, error } = await supabase
+        .from('notifications')
+        .select('id, title, body, is_read, created_at')
+        .eq('user_id', profile.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      const list = document.getElementById('notifications-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">Nothing yet.</p>';
+        return;
+      }
+
+      for (const n of data) {
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:10px 0; border-bottom:1px solid var(--border);';
+        row.innerHTML = `
+          <div style="display:flex; justify-content:space-between; gap:10px;">
+            <strong>${n.is_read ? '' : '🔵 '}${n.title}</strong>
+            <span class="hint">${new Date(n.created_at).toLocaleString()}</span>
+          </div>
+          <div class="hint">${n.body || ''}</div>
+        `;
+        if (!n.is_read) {
+          row.style.cursor = 'pointer';
+          row.addEventListener('click', async () => {
+            await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+            loadNotifications();
+          });
+        }
+        list.appendChild(row);
+      }
+    }
+
+    async function loadMyDay() {
+      const { data, error } = await supabase
+        .from('cases')
+        .select('id, case_number, customer_name, status, escalation_expires_at, sla_date')
+        .eq('assigned_to', profile.id)
+        .not('status', 'in', '("closed","resolved")')
+        .order('status', { ascending: false })
+        .order('escalation_expires_at', { ascending: true, nullsFirst: false })
+        .limit(25);
+
+      const tbody = document.querySelector('#my-day-table tbody');
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="5" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="hint">Nothing assigned to you right now.</td></tr>';
+        return;
+      }
+
+      for (const c of data) {
+        const countdown = escalationCountdown(c.escalation_expires_at);
+        const escalationCell = countdown
+          ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
+          : '<span class="hint">—</span>';
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.innerHTML = `
+          <td>${c.case_number}</td>
+          <td>${c.customer_name || '—'}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td>${escalationCell}</td>
+          <td>${c.sla_date || '—'}</td>
+        `;
+        tr.addEventListener('click', () => {
+          window.location.href = `/agent/case.html?id=${c.id}`;
+        });
+        tbody.appendChild(tr);
+      }
+    }
+  </script>
+</body>
+</html>

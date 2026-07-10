@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Case – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect</div>
+    <nav>
+      <a href="/agent/index.html">My Day</a>
+      <a href="/agent/cases.html" class="active">Cases</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/agent/index.html">My Day</a>
+      <a href="/agent/cases.html" class="active">All Cases</a>
+    </aside>
+
+    <main class="main">
+      <p><a href="/agent/cases.html">&larr; Back to cases</a></p>
+
+      <div class="card" id="case-header-card">
+        <div class="toolbar">
+          <h2 id="case-title" style="margin:0;">Loading…</h2>
+          <span id="escalation-countdown"></span>
+        </div>
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));" id="case-details-grid"></div>
+      </div>
+
+      <div class="card">
+        <h3>Status &amp; escalation</h3>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;">
+          <div>
+            <label style="margin-top:0;">Status</label>
+            <select id="status-select" style="width:200px;">
+              <option value="new">New</option>
+              <option value="pending">Pending</option>
+              <option value="escalated">Escalated</option>
+              <option value="awaiting_response">Awaiting Response</option>
+              <option value="resolved">Resolved</option>
+              <option value="closed">Closed</option>
+            </select>
+          </div>
+          <div id="escalation-fields" class="hidden" style="display:flex; gap:16px; flex-wrap:wrap;">
+            <div>
+              <label style="margin-top:0;">Reason</label>
+              <select id="escalation-reason" style="width:220px;"></select>
+            </div>
+            <div>
+              <label style="margin-top:0;">Service centre</label>
+              <select id="service-centre" style="width:220px;"></select>
+            </div>
+            <div>
+              <label style="margin-top:0;">Timer</label>
+              <select id="escalation-timer" style="width:140px;">
+                <option value="1">1 hour</option>
+                <option value="3" selected>3 hours</option>
+                <option value="8">8 hours</option>
+                <option value="24">24 hours</option>
+                <option value="48">48 hours</option>
+              </select>
+            </div>
+            <div>
+              <label style="margin-top:0;">Callback</label>
+              <select id="callback-arranged" style="width:180px;">
+                <option value="">—</option>
+                <option value="Callback arranged">Callback arranged</option>
+                <option value="Reachback arranged">Reachback arranged</option>
+                <option value="Callback completed">Callback completed</option>
+                <option value="Not required">Not required</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn" id="save-status-btn">Save</button>
+        </div>
+        <p class="error-text hidden" id="status-error"></p>
+      </div>
+
+      <div class="card hidden" id="template-card">
+        <h3>Escalation email templates</h3>
+        <div class="form-row">
+          <label style="margin-top:0;">Depot's update (paste here before copying the customer email)</label>
+          <textarea id="depot-update" rows="3"></textarea>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn secondary" id="copy-depot-btn">Copy depot email</button>
+          <button class="btn secondary" id="copy-customer-btn">Copy customer email</button>
+        </div>
+        <p class="success-text hidden" id="copy-success"></p>
+      </div>
+
+      <div class="card">
+        <h3>Notes</h3>
+        <form id="note-form">
+          <textarea id="note-text" rows="3" placeholder="Add a note…" required></textarea>
+          <div style="display:flex; gap:16px; align-items:center; margin-top:10px; flex-wrap:wrap;">
+            <label style="margin:0; display:flex; align-items:center; gap:6px;">
+              <input type="radio" name="note-type" value="internal" checked style="width:auto;" /> Internal
+            </label>
+            <label style="margin:0; display:flex; align-items:center; gap:6px;">
+              <input type="radio" name="note-type" value="customer" style="width:auto;" /> Customer-facing
+            </label>
+            <select id="tag-colleague" style="width:200px;">
+              <option value="">Tag a colleague (optional)</option>
+            </select>
+            <button class="btn" type="submit">Add note</button>
+          </div>
+        </form>
+        <div id="notes-list" style="margin-top:16px;"></div>
+      </div>
+
+      <div class="card">
+        <h3>Reminders</h3>
+        <form id="reminder-form" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+          <div><label style="margin-top:0;">When</label><input type="datetime-local" id="reminder-at" required /></div>
+          <div style="flex:1; min-width:200px;"><label style="margin-top:0;">Note</label><input id="reminder-note" /></div>
+          <button class="btn" type="submit">Add reminder</button>
+        </form>
+        <div id="reminders-list" style="margin-top:16px;"></div>
+      </div>
+
+      <div class="card">
+        <h3>History</h3>
+        <div id="history-list"></div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { statusBadge, escalationCountdown, fillTemplate, copyToClipboard } from '/js/caseHelpers.js';
+
+    const profile = await requireRole(['agent', 'admin']);
+    const caseId = new URLSearchParams(window.location.search).get('id');
+    let currentCase = null;
+    let escalationTemplate = null;
+    let serviceCentre = null;
+
+    if (!caseId) {
+      document.getElementById('case-title').textContent = 'No case specified.';
+    } else if (profile) {
+      await loadLookups();
+      await loadCase();
+      await loadNotes();
+      await loadReminders();
+      await loadHistory();
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    async function loadLookups() {
+      const [{ data: reasons }, { data: centres }, { data: colleagues }] = await Promise.all([
+        supabase.from('escalation_reasons').select('id, name').eq('is_active', true).order('name'),
+        supabase.from('service_centres').select('id, code, name').eq('is_active', true).order('name'),
+        supabase.from('profiles').select('id, full_name').eq('is_active', true).order('full_name'),
+      ]);
+
+      document.getElementById('escalation-reason').innerHTML =
+        (reasons || []).map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+      document.getElementById('service-centre').innerHTML =
+        (centres || []).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      document.getElementById('tag-colleague').innerHTML = '<option value="">Tag a colleague (optional)</option>' +
+        (colleagues || []).filter(c => c.id !== profile.id).map(c => `<option value="${c.id}">${c.full_name}</option>`).join('');
+    }
+
+    async function loadCase() {
+      const { data, error } = await supabase
+        .from('cases')
+        .select('*, case_types(name), service_centres(id, code, name, depot_email, cc_contacts), escalation_reasons(id, name)')
+        .eq('id', caseId)
+        .single();
+
+      if (error || !data) {
+        document.getElementById('case-title').textContent = 'Case not found.';
+        return;
+      }
+
+      currentCase = data;
+      renderCaseHeader();
+      renderStatusForm();
+      await renderTemplateCard();
+    }
+
+    function renderCaseHeader() {
+      document.getElementById('case-title').innerHTML =
+        `${currentCase.case_number} — ${currentCase.customer_name || 'Unknown customer'} ${statusBadge(currentCase.status)}`;
+
+      const countdown = escalationCountdown(currentCase.escalation_expires_at);
+      document.getElementById('escalation-countdown').innerHTML = countdown
+        ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
+        : '';
+
+      const grid = document.getElementById('case-details-grid');
+      const rows = [
+        ['Account #', currentCase.account_number],
+        ['Task #', currentCase.task_number],
+        ['Work order #', currentCase.work_order_number],
+        ['Case type', currentCase.case_types?.name],
+        ['Priority', currentCase.priority],
+        ['Customer phone', currentCase.customer_phone],
+        ['Customer email', currentCase.customer_email],
+        ['SLA date', currentCase.sla_date],
+        ['Times escalated', currentCase.times_escalated],
+        ['Service centre', currentCase.service_centres?.name],
+      ];
+      grid.innerHTML = rows.map(([label, value]) =>
+        `<div><div class="hint">${label}</div><div>${value || '—'}</div></div>`
+      ).join('');
+    }
+
+    function renderStatusForm() {
+      document.getElementById('status-select').value = currentCase.status;
+      document.getElementById('escalation-fields').classList.toggle('hidden', currentCase.status !== 'escalated');
+      if (currentCase.escalation_reason_id) document.getElementById('escalation-reason').value = currentCase.escalation_reason_id;
+      if (currentCase.service_centre_id) document.getElementById('service-centre').value = currentCase.service_centre_id;
+      if (currentCase.escalation_timer_hours) document.getElementById('escalation-timer').value = String(currentCase.escalation_timer_hours);
+      if (currentCase.callback_arranged) document.getElementById('callback-arranged').value = currentCase.callback_arranged;
+    }
+
+    document.getElementById('status-select').addEventListener('change', (e) => {
+      document.getElementById('escalation-fields').classList.toggle('hidden', e.target.value !== 'escalated');
+    });
+
+    document.getElementById('save-status-btn').addEventListener('click', async () => {
+      const errorEl = document.getElementById('status-error');
+      errorEl.classList.add('hidden');
+
+      const status = document.getElementById('status-select').value;
+      const update = { status };
+
+      if (status === 'escalated') {
+        update.escalation_reason_id = document.getElementById('escalation-reason').value || null;
+        update.service_centre_id = document.getElementById('service-centre').value || null;
+        update.escalation_timer_hours = Number(document.getElementById('escalation-timer').value);
+        update.callback_arranged = document.getElementById('callback-arranged').value || null;
+      }
+
+      const { error } = await supabase.from('cases').update(update).eq('id', caseId);
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      await loadCase();
+      await loadHistory();
+    });
+
+    async function renderTemplateCard() {
+      const templateCard = document.getElementById('template-card');
+      if (currentCase.status !== 'escalated' || !currentCase.escalation_reason_id) {
+        templateCard.classList.add('hidden');
+        return;
+      }
+
+      const { data } = await supabase
+        .from('escalation_templates')
+        .select('*')
+        .eq('escalation_reason_id', currentCase.escalation_reason_id)
+        .maybeSingle();
+
+      if (!data) {
+        templateCard.classList.add('hidden');
+        return;
+      }
+
+      escalationTemplate = data;
+      templateCard.classList.remove('hidden');
+    }
+
+    function tokenValues(update) {
+      const sla = currentCase.sla_date
+        ? new Date(currentCase.sla_date).toLocaleDateString('en-GB')
+        : null;
+      return {
+        ACCOUNT: currentCase.account_number,
+        TASK: currentCase.task_number,
+        WORKORDER: currentCase.work_order_number,
+        SLADATE: sla,
+        SERVICE: currentCase.case_types?.name,
+        NAME: profile.full_name,
+        CUSTOMER: currentCase.customer_name,
+        UPDATE: update,
+      };
+    }
+
+    document.getElementById('copy-depot-btn').addEventListener('click', async () => {
+      if (!escalationTemplate) return;
+      const body = fillTemplate(escalationTemplate.depot_subject, tokenValues()) + '\n\n' +
+        fillTemplate(escalationTemplate.depot_body, tokenValues());
+      const centre = currentCase.service_centres;
+      const header = centre ? `To: ${centre.depot_email}${centre.cc_contacts ? `\nCc: ${centre.cc_contacts}` : ''}\n\n` : '';
+      const ok = await copyToClipboard(header + body);
+      showCopySuccess(ok);
+    });
+
+    document.getElementById('copy-customer-btn').addEventListener('click', async () => {
+      if (!escalationTemplate) return;
+      const update = document.getElementById('depot-update').value.trim();
+      const body = fillTemplate(escalationTemplate.customer_subject, tokenValues(update)) + '\n\n' +
+        fillTemplate(escalationTemplate.customer_body, tokenValues(update));
+      const ok = await copyToClipboard(body);
+      showCopySuccess(ok);
+    });
+
+    function showCopySuccess(ok) {
+      const el = document.getElementById('copy-success');
+      el.textContent = ok ? 'Copied to clipboard.' : 'Could not copy — copy manually.';
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), 3000);
+    }
+
+    async function loadNotes() {
+      const { data, error } = await supabase
+        .from('case_notes')
+        .select('id, note, note_type, created_at, profiles(full_name)')
+        .eq('case_id', caseId)
+        .order('created_at', { ascending: false });
+
+      const list = document.getElementById('notes-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No notes yet.</p>';
+        return;
+      }
+
+      for (const n of data) {
+        const div = document.createElement('div');
+        div.style.cssText = 'padding:10px 0; border-bottom:1px solid var(--border);';
+        div.innerHTML = `
+          <div style="display:flex; justify-content:space-between; gap:10px;">
+            <strong>${n.profiles?.full_name || 'Unknown'}</strong>
+            <span class="hint">${new Date(n.created_at).toLocaleString()}</span>
+          </div>
+          <span class="badge ${n.note_type === 'customer' ? 'blue' : 'grey'}">${n.note_type}</span>
+          <p style="white-space:pre-wrap; margin:6px 0 0;">${n.note}</p>
+        `;
+        list.appendChild(div);
+      }
+    }
+
+    document.getElementById('note-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const note = document.getElementById('note-text').value.trim();
+      const noteType = document.querySelector('input[name="note-type"]:checked').value;
+      const tagged = document.getElementById('tag-colleague').value;
+
+      const { data: inserted, error } = await supabase
+        .from('case_notes')
+        .insert({ case_id: caseId, user_id: profile.id, note, note_type: noteType })
+        .select('id')
+        .single();
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      if (tagged) {
+        await supabase.from('case_mentions').insert({
+          case_id: caseId,
+          note_id: inserted.id,
+          mentioned_by: profile.id,
+          mentioned_user: tagged,
+        });
+      }
+
+      document.getElementById('note-form').reset();
+      await loadNotes();
+      await loadCase();
+    });
+
+    async function loadReminders() {
+      const { data, error } = await supabase
+        .from('reminders')
+        .select('id, reminder_at, note, is_dismissed')
+        .eq('case_id', caseId)
+        .eq('user_id', profile.id)
+        .order('reminder_at', { ascending: true });
+
+      const list = document.getElementById('reminders-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No reminders set.</p>';
+        return;
+      }
+
+      for (const r of data) {
+        const div = document.createElement('div');
+        div.style.cssText = 'padding:8px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:10px;';
+        div.innerHTML = `
+          <span>${r.is_dismissed ? '<s>' : ''}${new Date(r.reminder_at).toLocaleString()} — ${r.note || ''}${r.is_dismissed ? '</s>' : ''}</span>
+          <button class="btn secondary dismiss-btn" data-id="${r.id}" ${r.is_dismissed ? 'disabled' : ''}>${r.is_dismissed ? 'Done' : 'Dismiss'}</button>
+        `;
+        list.appendChild(div);
+      }
+
+      list.querySelectorAll('.dismiss-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await supabase.from('reminders').update({ is_dismissed: true }).eq('id', btn.dataset.id);
+          await loadReminders();
+        });
+      });
+    }
+
+    document.getElementById('reminder-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const reminderAt = document.getElementById('reminder-at').value;
+      const note = document.getElementById('reminder-note').value.trim();
+
+      const { error } = await supabase.from('reminders').insert({
+        case_id: caseId,
+        user_id: profile.id,
+        reminder_at: new Date(reminderAt).toISOString(),
+        note,
+      });
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+      document.getElementById('reminder-form').reset();
+      await loadReminders();
+    });
+
+    async function loadHistory() {
+      const { data, error } = await supabase
+        .from('case_status_history')
+        .select('old_status, new_status, changed_at, profiles(full_name)')
+        .eq('case_id', caseId)
+        .order('changed_at', { ascending: false });
+
+      const list = document.getElementById('history-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No status changes yet.</p>';
+        return;
+      }
+
+      for (const h of data) {
+        const div = document.createElement('div');
+        div.style.cssText = 'padding:6px 0; border-bottom:1px solid var(--border);';
+        div.innerHTML = `<span class="hint">${new Date(h.changed_at).toLocaleString()}</span> — ${h.profiles?.full_name || 'System'}: ${statusBadge(h.old_status || 'new')} → ${statusBadge(h.new_status)}`;
+        list.appendChild(div);
+      }
+    }
+  </script>
+</body>
+</html>

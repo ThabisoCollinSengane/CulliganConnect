@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CulliganConnect – Case Tracker</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="logo">
+        <div class="drop">C</div>
+        <strong>CulliganConnect</strong>
+      </div>
+      <h1>Sign in</h1>
+      <p class="subtitle">Case tracker &amp; escalation log for the Culligan call centre.</p>
+
+      <form id="login-form">
+        <div class="form-row">
+          <label for="email">Email</label>
+          <input id="email" type="email" autocomplete="username" required />
+        </div>
+        <div class="form-row">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required />
+        </div>
+        <button class="btn" type="submit" id="submit-btn">Sign in</button>
+        <p class="error-text hidden" id="error-msg"></p>
+      </form>
+      <p class="hint" style="margin-top: 20px;">
+        Accounts are created by your team admin. Contact your team leader if you don't have credentials.
+      </p>
+    </div>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+
+    const form = document.getElementById('login-form');
+    const errorMsg = document.getElementById('error-msg');
+    const submitBtn = document.getElementById('submit-btn');
+
+    // If already signed in, skip straight to the right dashboard.
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) await routeToDashboard(session.user.id);
+    })();
+
+    async function routeToDashboard(userId) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role, is_active')
+        .eq('id', userId)
+        .single();
+
+      if (!profile || !profile.is_active) {
+        errorMsg.textContent = 'Your account is disabled. Contact your admin.';
+        errorMsg.classList.remove('hidden');
+        await supabase.auth.signOut();
+        return;
+      }
+
+      window.location.href = profile.role === 'admin' ? '/admin/index.html' : '/agent/index.html';
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorMsg.classList.add('hidden');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in…';
+
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+      if (error) {
+        errorMsg.textContent = 'Incorrect email or password.';
+        errorMsg.classList.remove('hidden');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign in';
+        return;
+      }
+
+      await routeToDashboard(data.user.id);
+    });
+  </script>
+</body>
+</html>
