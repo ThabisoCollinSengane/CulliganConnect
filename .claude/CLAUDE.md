@@ -481,3 +481,53 @@ When comparing stats
 3. Create default admin user.
 4. Build admin user creation panel.
 5. Begin Phase 1 development.
+
+---
+
+🔄 v2 Update – Build Status & Schema Changes (2026-07-10)
+
+Phase 1 is live. Supabase project `CulliganConnect` (`gitiijehmmovfopgzmtl`, eu-west-1) is
+created with schema + RLS + seed data applied (`supabase/migrations/`), and the default admin
+(`thacollin2@gmail.com`) exists in Supabase Auth with a `profiles` row (`role = 'admin'`). The
+password was shared once out of band and is not stored anywhere in this repo or its history.
+
+The schema above was the v1 plan. The actual applied schema (see `supabase/migrations/`) deviates
+in a few places, informed by the real `Culligan_Escalation_Tracker.xlsx` the team was using:
+
+· `departments`, `case_types`, `escalation_reasons` are now real lookup **tables** (not free-text
+  columns on `profiles`/`cases`), so admins can add/edit/deactivate them from the Setup screen.
+  `profiles.department_id` and `cases.department_id` / `cases.case_type_id` /
+  `cases.escalation_reason_id` are FKs into them.
+· New `service_centres` table — the 16 real UK depots (code, town, regional manager, depot email,
+  CC contacts), seeded from the spreadsheet's Setup tab. A case escalates *to a depot*
+  (`cases.service_centre_id`), which is a different concept from the assigned agent's department.
+· New `escalation_templates` table — one row per escalation reason, holding both a depot-facing
+  and a customer-facing subject/body with `{ACCOUNT} {TASK} {WORKORDER} {SLADATE} {QTY} {SERVICE}
+  {NAME} {CUSTOMER} {UPDATE}` tokens, seeded with the 4 real templates from the spreadsheet
+  (Over SLA Water Delivery, Run Out of Water, Delayed Service, Delivery Not Received). This is
+  distinct from `email_templates`, which is for admin performance-report emails.
+· `cases.times_escalated` and `cases.callback_arranged` added, mirroring the spreadsheet's
+  "search before you escalate" and "Callback / Reachback Arranged" fields.
+· New `case_mentions` table — @mentions/tagging a colleague on a case note for input, with an
+  unread flag.
+· New `agent_mood_log` table — daily self-reported mood (`great/good/okay/stressed/overwhelmed`
+  + optional note), agent-private by default, admins can read (not write) for a team sentiment
+  view. Ties into the "call out the positive" mission — not meant to be punitive.
+· New `audit_log` table (generic actor/action/entity log — admin-only read), separate from the
+  more specific `escalation_audit`.
+· RLS policies use a `public.is_admin()` SECURITY DEFINER helper instead of inline subqueries on
+  `profiles` in `profiles`' own policies, to avoid Postgres RLS self-referencing recursion.
+· Team leaderboards default to **admin-only** visibility (deliberate deviation from "gamify with a
+  public leaderboard") — a public ranking of ~30 agents risks sandbagging/resentment; an opt-in
+  "share with team" toggle can be added later if wanted.
+
+Repo scaffold in place: `index.html` (login), `admin/index.html` (dashboard shell + live stats),
+`admin/users.html` (agent list + create-agent flow), `admin/settings.html` (departments/case
+types/service centres/escalation reasons), `css/styles.css` (blue theme), `js/supabaseClient.js` +
+`js/auth.js` (shared client/auth-guard), `api/admin/create-user.js` (Vercel serverless function
+that uses the service-role key server-side to create agent accounts — the key is never shipped to
+the browser).
+
+Not yet built: agent-facing dashboard/case list/case detail, escalation timer UI, reminders,
+mood check-in UI, @mention UI, ranking/reports, CSV/PDF export. These are Phases 2-5 from the
+roadmap above, now scoped against the real schema instead of the free-text v1 one.

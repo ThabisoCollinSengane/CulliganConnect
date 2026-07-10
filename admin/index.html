@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Dashboard – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <nav>
+      <a href="/admin/index.html" class="active">Dashboard</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/settings.html">Setup</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/admin/index.html" class="active">Dashboard</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/settings.html">Departments &amp; Setup</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <h2 id="welcome-msg">Welcome</h2>
+        <p class="hint">Live snapshot of the case tracker. Case management screens ship in the next phase — this is the operational foundation: agents, departments, case types, service centres and escalation templates.</p>
+      </div>
+
+      <div class="grid stats" id="stats-grid">
+        <div class="stat-tile"><div class="value" id="stat-agents">–</div><div class="label">Active agents</div></div>
+        <div class="stat-tile"><div class="value" id="stat-departments">–</div><div class="label">Departments</div></div>
+        <div class="stat-tile"><div class="value" id="stat-service-centres">–</div><div class="label">Service centres</div></div>
+        <div class="stat-tile"><div class="value" id="stat-cases-open">–</div><div class="label">Open cases</div></div>
+      </div>
+
+      <div class="card">
+        <h3>Agents by department</h3>
+        <table id="dept-table">
+          <thead><tr><th>Department</th><th>Agents</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+
+    const profile = await requireRole(['admin']);
+    if (profile) {
+      document.getElementById('welcome-msg').textContent = `Welcome back, ${profile.full_name || profile.email}`;
+      await loadStats();
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    async function loadStats() {
+      const [{ count: agentCount }, { data: departments }, { count: centreCount }, { count: openCases }] = await Promise.all([
+        supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'agent').eq('is_active', true),
+        supabase.from('departments').select('id, name').eq('is_active', true).order('name'),
+        supabase.from('service_centres').select('id', { count: 'exact', head: true }).eq('is_active', true),
+        supabase.from('cases').select('id', { count: 'exact', head: true }).not('status', 'in', '("closed","resolved")'),
+      ]);
+
+      document.getElementById('stat-agents').textContent = agentCount ?? 0;
+      document.getElementById('stat-departments').textContent = (departments || []).length;
+      document.getElementById('stat-service-centres').textContent = centreCount ?? 0;
+      document.getElementById('stat-cases-open').textContent = openCases ?? 0;
+
+      const tbody = document.querySelector('#dept-table tbody');
+      tbody.innerHTML = '';
+
+      for (const dept of departments || []) {
+        const { count } = await supabase
+          .from('profiles')
+          .select('id', { count: 'exact', head: true })
+          .eq('department_id', dept.id)
+          .eq('role', 'agent')
+          .eq('is_active', true);
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${dept.name}</td><td>${count ?? 0}</td>`;
+        tbody.appendChild(tr);
+      }
+
+      if (!departments || departments.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="2" class="hint">No departments yet.</td></tr>';
+      }
+    }
+  </script>
+</body>
+</html>

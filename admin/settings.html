@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Setup – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <nav>
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/settings.html" class="active">Setup</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/settings.html" class="active">Departments &amp; Setup</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">Departments</h3>
+          <form class="inline-add" data-table="departments" data-fields="name,description">
+            <div style="display:flex; gap:8px; align-items:flex-end;">
+              <div><label style="margin-top:0;">Name</label><input name="name" required style="width:160px;" /></div>
+              <div><label style="margin-top:0;">Description</label><input name="description" style="width:220px;" /></div>
+              <button class="btn" type="submit">Add</button>
+            </div>
+          </form>
+        </div>
+        <table><thead><tr><th>Name</th><th>Description</th><th>Status</th><th></th></tr></thead>
+          <tbody id="departments-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">Case types</h3>
+          <form class="inline-add" data-table="case_types" data-fields="name">
+            <div style="display:flex; gap:8px; align-items:flex-end;">
+              <div><label style="margin-top:0;">Name</label><input name="name" required style="width:220px;" /></div>
+              <button class="btn" type="submit">Add</button>
+            </div>
+          </form>
+        </div>
+        <table><thead><tr><th>Name</th><th>Status</th><th></th></tr></thead>
+          <tbody id="case_types-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Service centres (depots)</h3>
+        <p class="hint">Where escalations get routed. Seeded from the UK depot directory.</p>
+        <table>
+          <thead><tr><th>Code</th><th>Name</th><th>Regional manager</th><th>Depot email</th><th>Status</th></tr></thead>
+          <tbody id="service_centres-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Escalation reasons</h3>
+        <table><thead><tr><th>Reason</th><th>Has email template</th><th>Status</th></tr></thead>
+          <tbody id="escalation_reasons-body"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+
+    const profile = await requireRole(['admin']);
+    if (profile) {
+      await Promise.all([
+        loadSimpleTable('departments', ['name', 'description']),
+        loadSimpleTable('case_types', ['name']),
+        loadServiceCentres(),
+        loadEscalationReasons(),
+      ]);
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    document.querySelectorAll('form.inline-add').forEach(form => {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const table = form.dataset.table;
+        const fields = form.dataset.fields.split(',');
+        const row = {};
+        for (const f of fields) {
+          const val = form.querySelector(`[name="${f}"]`).value.trim();
+          if (val) row[f] = val;
+        }
+        const { error } = await supabase.from(table).insert(row);
+        if (error) {
+          alert(error.message);
+          return;
+        }
+        form.reset();
+        await loadSimpleTable(table, fields);
+      });
+    });
+
+    async function loadSimpleTable(table, fields) {
+      const { data, error } = await supabase.from(table).select('*').order('name');
+      const tbody = document.getElementById(`${table}-body`);
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="4" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" class="hint">None yet.</td></tr>`;
+        return;
+      }
+
+      for (const row of data) {
+        const tr = document.createElement('tr');
+        const cells = fields.map(f => `<td>${row[f] ?? '—'}</td>`).join('');
+        const statusBadge = row.is_active ? '<span class="badge green">Active</span>' : '<span class="badge grey">Inactive</span>';
+        tr.innerHTML = `${cells}<td>${statusBadge}</td><td><button class="btn secondary toggle" data-table="${table}" data-id="${row.id}" data-active="${row.is_active}">${row.is_active ? 'Deactivate' : 'Activate'}</button></td>`;
+        tbody.appendChild(tr);
+      }
+
+      tbody.querySelectorAll('.toggle').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await supabase.from(btn.dataset.table).update({ is_active: btn.dataset.active !== 'true' }).eq('id', btn.dataset.id);
+          await loadSimpleTable(table, fields);
+        });
+      });
+    }
+
+    async function loadServiceCentres() {
+      const { data, error } = await supabase.from('service_centres').select('*').order('code');
+      const tbody = document.getElementById('service_centres-body');
+      tbody.innerHTML = '';
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="5" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      for (const c of data || []) {
+        const tr = document.createElement('tr');
+        const statusBadge = c.is_active ? '<span class="badge green">Active</span>' : '<span class="badge grey">Inactive</span>';
+        tr.innerHTML = `<td>${c.code}</td><td>${c.name}</td><td>${c.regional_manager || '—'}</td><td>${c.depot_email}</td><td>${statusBadge}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function loadEscalationReasons() {
+      const { data: reasons, error } = await supabase.from('escalation_reasons').select('*').order('name');
+      const { data: templates } = await supabase.from('escalation_templates').select('escalation_reason_id');
+      const templateIds = new Set((templates || []).map(t => t.escalation_reason_id));
+
+      const tbody = document.getElementById('escalation_reasons-body');
+      tbody.innerHTML = '';
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="3" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      for (const r of reasons || []) {
+        const tr = document.createElement('tr');
+        const hasTemplate = templateIds.has(r.id)
+          ? '<span class="badge blue">Yes</span>'
+          : '<span class="badge grey">No</span>';
+        const statusBadge = r.is_active ? '<span class="badge green">Active</span>' : '<span class="badge grey">Inactive</span>';
+        tr.innerHTML = `<td>${r.name}</td><td>${hasTemplate}</td><td>${statusBadge}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+  </script>
+</body>
+</html>

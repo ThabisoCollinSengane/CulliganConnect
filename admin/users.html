@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agents – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <nav>
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/users.html" class="active">Agents</a>
+      <a href="/admin/settings.html">Setup</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/users.html" class="active">Agents</a>
+      <a href="/admin/settings.html">Departments &amp; Setup</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <div class="toolbar">
+          <h2 style="margin:0;">Agents</h2>
+          <button class="btn" id="add-agent-btn">+ Add agent</button>
+        </div>
+        <table id="agents-table">
+          <thead>
+            <tr><th>Name</th><th>Email</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop hidden" id="modal-backdrop">
+    <div class="modal">
+      <h3>Add agent</h3>
+      <form id="add-agent-form">
+        <div class="form-row">
+          <label for="full-name">Full name</label>
+          <input id="full-name" required />
+        </div>
+        <div class="form-row">
+          <label for="new-email">Email</label>
+          <input id="new-email" type="email" required />
+        </div>
+        <div class="form-row">
+          <label for="new-password">Temporary password</label>
+          <input id="new-password" type="text" required minlength="8" />
+          <p class="hint">Share this with the agent directly; they should change it after first login.</p>
+        </div>
+        <div class="form-row">
+          <label for="department">Department</label>
+          <select id="department"></select>
+        </div>
+        <div class="form-row">
+          <label for="role">Role</label>
+          <select id="role">
+            <option value="agent" selected>Agent</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <p class="error-text hidden" id="form-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="cancel-btn">Cancel</button>
+          <button type="submit" class="btn" id="save-btn">Create agent</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+
+    const profile = await requireRole(['admin']);
+    if (profile) {
+      await loadDepartments();
+      await loadAgents();
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    const modal = document.getElementById('modal-backdrop');
+    document.getElementById('add-agent-btn').addEventListener('click', () => modal.classList.remove('hidden'));
+    document.getElementById('cancel-btn').addEventListener('click', () => modal.classList.add('hidden'));
+
+    async function loadDepartments() {
+      const { data } = await supabase.from('departments').select('id, name').eq('is_active', true).order('name');
+      const select = document.getElementById('department');
+      select.innerHTML = '<option value="">— none —</option>' +
+        (data || []).map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+    }
+
+    async function loadAgents() {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, role, is_active, departments(name)')
+        .order('full_name');
+
+      const tbody = document.querySelector('#agents-table tbody');
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="6" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="hint">No agents yet.</td></tr>';
+        return;
+      }
+
+      for (const u of data) {
+        const tr = document.createElement('tr');
+        const statusBadge = u.is_active
+          ? '<span class="badge green">Active</span>'
+          : '<span class="badge grey">Disabled</span>';
+        tr.innerHTML = `
+          <td>${u.full_name || '—'}</td>
+          <td>${u.email}</td>
+          <td>${u.departments?.name || '—'}</td>
+          <td><span class="badge blue">${u.role}</span></td>
+          <td>${statusBadge}</td>
+          <td><button class="btn secondary toggle-btn" data-id="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Disable' : 'Enable'}</button></td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      tbody.querySelectorAll('.toggle-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.id;
+          const isActive = btn.dataset.active === 'true';
+          if (id === profile.id) {
+            alert("You can't disable your own account.");
+            return;
+          }
+          await supabase.from('profiles').update({ is_active: !isActive }).eq('id', id);
+          await loadAgents();
+        });
+      });
+    }
+
+    document.getElementById('add-agent-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('form-error');
+      errorEl.classList.add('hidden');
+
+      const saveBtn = document.getElementById('save-btn');
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Creating…';
+
+      const { data: { session } } = await supabase.auth.getSession();
+
+      const payload = {
+        full_name: document.getElementById('full-name').value.trim(),
+        email: document.getElementById('new-email').value.trim(),
+        password: document.getElementById('new-password').value,
+        department_id: document.getElementById('department').value || null,
+        role: document.getElementById('role').value,
+      };
+
+      try {
+        const res = await fetch('/api/admin/create-user', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        const result = await res.json();
+
+        if (!res.ok) {
+          throw new Error(result.error || 'Failed to create agent');
+        }
+
+        modal.classList.add('hidden');
+        document.getElementById('add-agent-form').reset();
+        await loadAgents();
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove('hidden');
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Create agent';
+      }
+    });
+  </script>
+</body>
+</html>
