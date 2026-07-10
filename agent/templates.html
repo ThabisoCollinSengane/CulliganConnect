@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Templates – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect</div>
+    <nav>
+      <a href="/agent/index.html">My Day</a>
+      <a href="/agent/cases.html">Cases</a>
+      <a href="/agent/templates.html" class="active">Templates</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/agent/index.html">My Day</a>
+      <a href="/agent/cases.html">All Cases</a>
+      <a href="/agent/templates.html" class="active">Templates</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <h2 style="margin:0 0 4px;">Email templates</h2>
+        <p class="hint">Canned responses your admin has set up. Copy one and paste it into Outlook/Teams.</p>
+      </div>
+
+      <div id="templates-list"></div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { copyToClipboard } from '/js/caseHelpers.js';
+
+    const profile = await requireRole(['agent', 'admin']);
+    if (profile) {
+      await loadTemplates();
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    async function loadTemplates() {
+      const { data, error } = await supabase.from('email_templates').select('*').order('category').order('name');
+      const list = document.getElementById('templates-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<div class="card"><p class="hint">No templates yet — ask your admin to add some.</p></div>';
+        return;
+      }
+
+      for (const t of data) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="toolbar">
+            <div>
+              <h3 style="margin:0;">${t.name}</h3>
+              <span class="hint">${t.category || 'Uncategorised'}</span>
+            </div>
+            <button class="btn secondary copy-btn">Copy</button>
+          </div>
+          <p class="hint" style="font-weight:600;">${t.subject}</p>
+          <p style="white-space:pre-wrap;">${t.body}</p>
+          <p class="success-text hidden">Copied to clipboard.</p>
+        `;
+        card.querySelector('.copy-btn').addEventListener('click', async () => {
+          const ok = await copyToClipboard(`${t.subject}\n\n${t.body}`);
+          const successEl = card.querySelector('.success-text');
+          successEl.textContent = ok ? 'Copied to clipboard.' : 'Could not copy — copy manually.';
+          successEl.classList.remove('hidden');
+          setTimeout(() => successEl.classList.add('hidden'), 3000);
+        });
+        list.appendChild(card);
+      }
+    }
+  </script>
+</body>
+</html>

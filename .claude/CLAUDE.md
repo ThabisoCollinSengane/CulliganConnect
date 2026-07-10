@@ -681,3 +681,48 @@ As with the v4 changes, the RLS policy rewrite was re-verified against **real RL
 (throwaway test agent + `set local role authenticated` + simulated JWT claims), not just
 applied — every rewritten policy was exercised (profile visibility, case create, note insert,
 reminder insert) before and after, then the test user was deleted.
+
+---
+
+📋 v6 Update – Templates, admin case management, reports, audit log (2026-07-11)
+
+Filled in the largest remaining gaps against the original feature list — most notably that
+**admins previously had no way to see or assign cases at all** (only a stat-tile count on the
+dashboard). New pages, no schema changes needed (all tables already existed):
+
+· `admin/templates.html` — CRUD for `email_templates` (the general canned-response library, e.g.
+  "Delivery delayed") and `escalation_templates` (one row per escalation reason: depot + customer
+  email, upserted on `escalation_reason_id`). Added `authenticated_read_email_templates` RLS
+  policy since agents previously had no read access at all to `email_templates`.
+· `agent/templates.html` — agents browse and copy the `email_templates` library (plain
+  copy-to-clipboard, no token substitution — that's what the escalation templates on the case
+  detail page are for).
+· `admin/cases.html` — the missing admin case list: search/filter (status, department,
+  at-risk-only), single-row reassign via inline `<select>`, and bulk-select + "Assign selected"
+  for multiple cases at once. Rows link into `/agent/case.html?id=...` for full detail — that
+  page already works for admins as-is since `admins_all_cases` grants full RLS access regardless
+  of `assigned_to`, so it didn't need a separate admin case-detail page.
+· `admin/reports.html` — the agent ranking + "Generate performance email report" feature from
+  the original spec, combined into one screen since they're the same underlying per-agent stats
+  query (closed/interacted/escalated/SLA breaches over a date range, ranked by closed,
+  interacted, or a weighted score). Includes CSV export (PDF export is still not implemented).
+· `admin/audit-log.html` — simple table over the `audit_log` rows the `create-agent` Edge
+  Function has been writing to since v5 (nothing else writes to it yet).
+
+Admin nav grew from 3 items to 7 (Dashboard/Cases/Agents/Templates/Reports/Setup/Audit Log) and
+agent nav from 2 to 3 (My Day/Cases/Templates) — kept as plain duplicated `<header>`/`<aside>`
+markup per page rather than introducing a shared nav component, matching the rest of the
+codebase's style even though the duplication is now spread across 10 files.
+
+Verified against real RLS enforcement again — this time including the **admin path**, which had
+only ever been tested via the superuser migration connection (which bypasses RLS and proves
+nothing) or via `is_admin()` being asserted true implicitly. Simulated the actual admin account's
+session (`set local role authenticated` + its real `auth.uid()`) and exercised: bulk case
+reassignment (`admins_all_cases` UPDATE), `email_templates` insert, and confirmed a random
+non-admin authenticated session can still read `email_templates` (the new agent-facing policy).
+All test rows cleaned up afterward.
+
+Still not built: real-time browser push notifications (in-app notification list exists;
+OS-level `Notification` API is not wired up), auto-save on notes (currently save-on-submit
+only), keyboard shortcuts, a standalone "Quick Notes" sidebar widget, and PDF export. These are
+lower-value/higher-effort relative to what shipped this round.
