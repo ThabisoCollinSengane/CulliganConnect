@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reports – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <nav>
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/templates.html">Templates</a>
+      <a href="/admin/reports.html" class="active">Reports</a>
+      <a href="/admin/settings.html">Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/templates.html">Templates</a>
+      <a href="/admin/reports.html" class="active">Reports</a>
+      <a href="/admin/settings.html">Departments &amp; Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <h2 style="margin:0 0 4px;">Agent performance</h2>
+        <p class="hint">Rank agents, then copy a formatted summary straight into Outlook or Teams.</p>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; margin-top:16px;">
+          <div>
+            <label style="margin-top:0;">Date range</label>
+            <select id="range-preset" style="width:160px;">
+              <option value="today">Today</option>
+              <option value="week" selected>This week</option>
+              <option value="month">This month</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div id="custom-range" class="hidden" style="display:flex; gap:10px;">
+            <div><label style="margin-top:0;">From</label><input type="date" id="range-from" /></div>
+            <div><label style="margin-top:0;">To</label><input type="date" id="range-to" /></div>
+          </div>
+          <div>
+            <label style="margin-top:0;">Department</label>
+            <select id="department-filter" style="width:200px;"></select>
+          </div>
+          <div>
+            <label style="margin-top:0;">Rank by</label>
+            <select id="rank-by" style="width:200px;">
+              <option value="closed">Cases closed</option>
+              <option value="interacted">Cases interacted</option>
+              <option value="weighted" selected>Weighted score (closed×2 + interacted×1)</option>
+            </select>
+          </div>
+          <button class="btn" id="run-btn">Run</button>
+        </div>
+      </div>
+
+      <div class="card hidden" id="results-card">
+        <div class="toolbar">
+          <h3 style="margin:0;">Results</h3>
+          <div style="display:flex; gap:10px;">
+            <button class="btn secondary" id="export-csv-btn">Export CSV</button>
+            <button class="btn" id="generate-email-btn">Generate email</button>
+          </div>
+        </div>
+        <table id="ranking-table">
+          <thead><tr><th>#</th><th>Agent</th><th>Department</th><th>Closed</th><th>Interacted</th><th>Escalated</th><th>SLA breaches</th><th>Weighted</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card hidden" id="email-card">
+        <div class="toolbar">
+          <h3 style="margin:0;">Generated email</h3>
+          <button class="btn secondary" id="copy-email-btn">Copy to clipboard</button>
+        </div>
+        <textarea id="email-output" rows="18" readonly style="font-family: ui-monospace, monospace; font-size: 0.85rem;"></textarea>
+        <p class="success-text hidden" id="copy-success">Copied to clipboard.</p>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { copyToClipboard } from '/js/caseHelpers.js';
+
+    const profile = await requireRole(['admin']);
+    let lastResults = null;
+    let lastRangeLabel = '';
+    let lastDeptLabel = 'All departments';
+
+    if (profile) {
+      await loadDepartments();
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    document.getElementById('range-preset').addEventListener('change', (e) => {
+      document.getElementById('custom-range').classList.toggle('hidden', e.target.value !== 'custom');
+    });
+
+    document.getElementById('run-btn').addEventListener('click', runReport);
+
+    async function loadDepartments() {
+      const { data } = await supabase.from('departments').select('id, name').eq('is_active', true).order('name');
+      document.getElementById('department-filter').innerHTML = '<option value="">All departments</option>' +
+        (data || []).map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+    }
+
+    function resolveRange() {
+      const preset = document.getElementById('range-preset').value;
+      const now = new Date();
+      let from, to = now;
+
+      if (preset === 'today') {
+        from = new Date(now); from.setHours(0, 0, 0, 0);
+        lastRangeLabel = 'Today';
+      } else if (preset === 'week') {
+        from = new Date(now);
+        const day = (from.getDay() + 6) % 7; // Monday = 0
+        from.setDate(from.getDate() - day);
+        from.setHours(0, 0, 0, 0);
+        lastRangeLabel = 'This week';
+      } else if (preset === 'month') {
+        from = new Date(now.getFullYear(), now.getMonth(), 1);
+        lastRangeLabel = 'This month';
+      } else {
+        const fromVal = document.getElementById('range-from').value;
+        const toVal = document.getElementById('range-to').value;
+        from = fromVal ? new Date(fromVal) : new Date(now.getFullYear(), now.getMonth(), 1);
+        to = toVal ? new Date(new Date(toVal).getTime() + 86400000) : now;
+        lastRangeLabel = `${fromVal || '?'} – ${toVal || '?'}`;
+      }
+      return { from, to };
+    }
+
+    async function runReport() {
+      const { from, to } = resolveRange();
+      const deptId = document.getElementById('department-filter').value;
+      lastDeptLabel = deptId
+        ? document.querySelector('#department-filter option:checked').textContent
+        : 'All departments';
+
+      let agentQuery = supabase.from('profiles').select('id, full_name, department_id, departments(name)')
+        .eq('role', 'agent').eq('is_active', true);
+      if (deptId) agentQuery = agentQuery.eq('department_id', deptId);
+      const { data: agentList } = await agentQuery;
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      const rows = await Promise.all((agentList || []).map(async (agent) => {
+        const [{ count: closed }, { data: notes }, { count: escalated }, { count: slaBreaches }] = await Promise.all([
+          supabase.from('cases').select('id', { count: 'exact', head: true })
+            .eq('assigned_to', agent.id).gte('closed_at', from.toISOString()).lte('closed_at', to.toISOString()),
+          supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
+            .eq('cases.assigned_to', agent.id).gte('created_at', from.toISOString()).lte('created_at', to.toISOString()),
+          supabase.from('cases').select('id', { count: 'exact', head: true })
+            .eq('assigned_to', agent.id).gte('escalated_at', from.toISOString()).lte('escalated_at', to.toISOString()),
+          supabase.from('cases').select('id', { count: 'exact', head: true })
+            .eq('assigned_to', agent.id).lt('sla_date', today).is('closed_at', null),
+        ]);
+
+        const interacted = new Set((notes || []).map(n => n.case_id)).size;
+        const closedCount = closed || 0;
+        return {
+          agent,
+          closed: closedCount,
+          interacted,
+          escalated: escalated || 0,
+          slaBreaches: slaBreaches || 0,
+          weighted: closedCount * 2 + interacted,
+        };
+      }));
+
+      const rankBy = document.getElementById('rank-by').value;
+      rows.sort((a, b) => b[rankBy === 'closed' ? 'closed' : rankBy === 'interacted' ? 'interacted' : 'weighted']
+        - a[rankBy === 'closed' ? 'closed' : rankBy === 'interacted' ? 'interacted' : 'weighted']);
+
+      lastResults = rows;
+      renderTable(rows);
+      document.getElementById('results-card').classList.remove('hidden');
+      document.getElementById('email-card').classList.add('hidden');
+    }
+
+    function renderTable(rows) {
+      const tbody = document.querySelector('#ranking-table tbody');
+      tbody.innerHTML = '';
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="hint">No agents match this filter.</td></tr>';
+        return;
+      }
+      rows.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${i + 1}${i === 0 ? ' 🏆' : ''}</td>
+          <td>${r.agent.full_name}</td>
+          <td>${r.agent.departments?.name || '—'}</td>
+          <td>${r.closed}</td>
+          <td>${r.interacted}</td>
+          <td>${r.escalated}</td>
+          <td>${r.slaBreaches}</td>
+          <td>${r.weighted}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById('export-csv-btn').addEventListener('click', () => {
+      if (!lastResults) return;
+      const header = 'Rank,Agent,Department,Closed,Interacted,Escalated,SLA Breaches,Weighted\n';
+      const rows = lastResults.map((r, i) =>
+        [i + 1, r.agent.full_name, r.agent.departments?.name || '', r.closed, r.interacted, r.escalated, r.slaBreaches, r.weighted]
+          .map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+      ).join('\n');
+      const blob = new Blob([header + rows], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `culligan-performance-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('generate-email-btn').addEventListener('click', () => {
+      if (!lastResults || lastResults.length === 0) return;
+
+      const totalClosed = lastResults.reduce((s, r) => s + r.closed, 0);
+      const totalEscalated = lastResults.reduce((s, r) => s + r.escalated, 0);
+      const totalSla = lastResults.reduce((s, r) => s + r.slaBreaches, 0);
+      const totalCases = lastResults.reduce((s, r) => s + r.closed + r.interacted, 0) || 1;
+      const escalationRate = Math.round((totalEscalated / Math.max(totalClosed, 1)) * 100);
+
+      const topClosed = [...lastResults].sort((a, b) => b.closed - a.closed)[0];
+      const topInteracted = [...lastResults].sort((a, b) => b.interacted - a.interacted)[0];
+
+      const rows = lastResults.map(r =>
+        `| ${r.agent.full_name} | ${r.closed} | ${r.interacted} | ${r.escalated} |`
+      ).join('\n');
+
+      const email = `Subject: Performance Summary – ${lastDeptLabel} (${lastRangeLabel})
+
+Hi Team,
+
+Here is the performance summary for ${lastRangeLabel.toLowerCase()}.
+
+📊 Team Overview:
+- Total cases closed: ${totalClosed}
+- Escalations: ${totalEscalated}
+- SLA breaches: ${totalSla}
+
+🏆 Top Performer (Closures): ${topClosed?.agent.full_name || '—'} – ${topClosed?.closed || 0} cases closed
+🏆 Top Performer (Interactions): ${topInteracted?.agent.full_name || '—'} – ${topInteracted?.interacted || 0} case interactions
+
+Agent Breakdown:
+| Agent | Closed | Interacted | Escalations |
+|-------|--------|------------|-------------|
+${rows}
+
+Keep up the great work!
+`;
+      document.getElementById('email-output').value = email;
+      document.getElementById('email-card').classList.remove('hidden');
+    });
+
+    document.getElementById('copy-email-btn').addEventListener('click', async () => {
+      const ok = await copyToClipboard(document.getElementById('email-output').value);
+      const el = document.getElementById('copy-success');
+      el.textContent = ok ? 'Copied to clipboard.' : 'Could not copy — copy manually.';
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), 3000);
+    });
+  </script>
+</body>
+</html>

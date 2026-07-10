@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Templates – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <nav>
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/templates.html" class="active">Templates</a>
+      <a href="/admin/reports.html">Reports</a>
+      <a href="/admin/settings.html">Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/templates.html" class="active">Templates</a>
+      <a href="/admin/reports.html">Reports</a>
+      <a href="/admin/settings.html">Departments &amp; Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <div class="toolbar">
+          <div>
+            <h2 style="margin:0;">Email templates</h2>
+            <p class="hint">Canned responses agents can copy for common situations (e.g. "Delivery delayed").</p>
+          </div>
+          <button class="btn" id="new-email-template-btn">+ Add template</button>
+        </div>
+        <table id="email-templates-table">
+          <thead><tr><th>Name</th><th>Category</th><th>Subject</th><th>Status</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2 style="margin:0 0 4px;">Escalation email templates</h2>
+        <p class="hint">One template per escalation reason: a depot-facing email and a customer-facing reply, both using
+          <code>{ACCOUNT} {TASK} {WORKORDER} {SLADATE} {QTY} {SERVICE} {NAME} {CUSTOMER} {UPDATE}</code> tokens filled in
+          automatically when an agent copies them from a case.</p>
+        <table id="escalation-templates-table">
+          <thead><tr><th>Reason</th><th>Status</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop hidden" id="email-modal-backdrop">
+    <div class="modal">
+      <h3 id="email-modal-title">Add email template</h3>
+      <form id="email-template-form">
+        <input type="hidden" id="et-id" />
+        <div class="form-row"><label>Name</label><input id="et-name" required /></div>
+        <div class="form-row"><label>Category</label><input id="et-category" placeholder="e.g. Delivery" /></div>
+        <div class="form-row"><label>Subject</label><input id="et-subject" required /></div>
+        <div class="form-row"><label>Body</label><textarea id="et-body" rows="8" required></textarea></div>
+        <p class="error-text hidden" id="email-modal-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="email-modal-cancel">Cancel</button>
+          <button type="submit" class="btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="esc-modal-backdrop">
+    <div class="modal" style="max-width:640px;">
+      <h3 id="esc-modal-title">Escalation template</h3>
+      <form id="esc-template-form">
+        <input type="hidden" id="esc-reason-id" />
+        <p class="hint" id="esc-reason-name" style="font-weight:600; color:var(--dark-blue);"></p>
+        <div class="form-row"><label>Depot email subject</label><input id="esc-depot-subject" required /></div>
+        <div class="form-row"><label>Depot email body</label><textarea id="esc-depot-body" rows="7" required></textarea></div>
+        <div class="form-row"><label>Customer email subject</label><input id="esc-customer-subject" /></div>
+        <div class="form-row"><label>Customer email body</label><textarea id="esc-customer-body" rows="7"></textarea></div>
+        <p class="error-text hidden" id="esc-modal-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="esc-modal-cancel">Cancel</button>
+          <button type="submit" class="btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import { requireRole, signOut } from '/js/auth.js';
+
+    const profile = await requireRole(['admin']);
+    if (profile) {
+      await Promise.all([loadEmailTemplates(), loadEscalationTemplates()]);
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    // ---- Email templates (canned responses) ----
+    const emailModal = document.getElementById('email-modal-backdrop');
+    document.getElementById('new-email-template-btn').addEventListener('click', () => openEmailModal());
+    document.getElementById('email-modal-cancel').addEventListener('click', () => emailModal.classList.add('hidden'));
+
+    function openEmailModal(row) {
+      document.getElementById('email-modal-error').classList.add('hidden');
+      document.getElementById('email-modal-title').textContent = row ? 'Edit email template' : 'Add email template';
+      document.getElementById('et-id').value = row?.id || '';
+      document.getElementById('et-name').value = row?.name || '';
+      document.getElementById('et-category').value = row?.category || '';
+      document.getElementById('et-subject').value = row?.subject || '';
+      document.getElementById('et-body').value = row?.body || '';
+      emailModal.classList.remove('hidden');
+    }
+
+    async function loadEmailTemplates() {
+      const { data, error } = await supabase.from('email_templates').select('*').order('name');
+      const tbody = document.querySelector('#email-templates-table tbody');
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="5" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="hint">No templates yet.</td></tr>';
+        return;
+      }
+
+      for (const row of data) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${row.name}</td>
+          <td>${row.category || '—'}</td>
+          <td>${row.subject}</td>
+          <td><span class="badge green">Active</span></td>
+          <td>
+            <button class="btn secondary edit-et-btn">Edit</button>
+            <button class="btn secondary delete-et-btn">Delete</button>
+          </td>
+        `;
+        tr.querySelector('.edit-et-btn').addEventListener('click', () => openEmailModal(row));
+        tr.querySelector('.delete-et-btn').addEventListener('click', async () => {
+          if (!confirm(`Delete "${row.name}"?`)) return;
+          await supabase.from('email_templates').delete().eq('id', row.id);
+          await loadEmailTemplates();
+        });
+        tbody.appendChild(tr);
+      }
+    }
+
+    document.getElementById('email-template-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('email-modal-error');
+      errorEl.classList.add('hidden');
+
+      const id = document.getElementById('et-id').value;
+      const row = {
+        name: document.getElementById('et-name').value.trim(),
+        category: document.getElementById('et-category').value.trim() || null,
+        subject: document.getElementById('et-subject').value.trim(),
+        body: document.getElementById('et-body').value,
+        created_by: profile.id,
+      };
+
+      const { error } = id
+        ? await supabase.from('email_templates').update(row).eq('id', id)
+        : await supabase.from('email_templates').insert(row);
+
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      emailModal.classList.add('hidden');
+      await loadEmailTemplates();
+    });
+
+    // ---- Escalation templates ----
+    const escModal = document.getElementById('esc-modal-backdrop');
+    document.getElementById('esc-modal-cancel').addEventListener('click', () => escModal.classList.add('hidden'));
+
+    async function loadEscalationTemplates() {
+      const [{ data: reasons, error }, { data: templates }] = await Promise.all([
+        supabase.from('escalation_reasons').select('*').order('name'),
+        supabase.from('escalation_templates').select('*'),
+      ]);
+
+      const templateByReason = new Map((templates || []).map(t => [t.escalation_reason_id, t]));
+      const tbody = document.querySelector('#escalation-templates-table tbody');
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="3" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+
+      for (const reason of reasons || []) {
+        const template = templateByReason.get(reason.id);
+        const statusBadge = template
+          ? '<span class="badge blue">Configured</span>'
+          : '<span class="badge grey">No template</span>';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${reason.name}</td>
+          <td>${statusBadge}</td>
+          <td><button class="btn secondary edit-esc-btn">${template ? 'Edit' : 'Add'}</button></td>
+        `;
+        tr.querySelector('.edit-esc-btn').addEventListener('click', () => openEscModal(reason, template));
+        tbody.appendChild(tr);
+      }
+    }
+
+    function openEscModal(reason, template) {
+      document.getElementById('esc-modal-error').classList.add('hidden');
+      document.getElementById('esc-modal-title').textContent = template ? 'Edit escalation template' : 'Add escalation template';
+      document.getElementById('esc-reason-id').value = reason.id;
+      document.getElementById('esc-reason-name').textContent = reason.name;
+      document.getElementById('esc-depot-subject').value = template?.depot_subject || '';
+      document.getElementById('esc-depot-body').value = template?.depot_body || '';
+      document.getElementById('esc-customer-subject').value = template?.customer_subject || '';
+      document.getElementById('esc-customer-body').value = template?.customer_body || '';
+      escModal.classList.remove('hidden');
+    }
+
+    document.getElementById('esc-template-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('esc-modal-error');
+      errorEl.classList.add('hidden');
+
+      const row = {
+        escalation_reason_id: document.getElementById('esc-reason-id').value,
+        depot_subject: document.getElementById('esc-depot-subject').value.trim(),
+        depot_body: document.getElementById('esc-depot-body').value,
+        customer_subject: document.getElementById('esc-customer-subject').value.trim() || null,
+        customer_body: document.getElementById('esc-customer-body').value || null,
+        created_by: profile.id,
+      };
+
+      const { error } = await supabase.from('escalation_templates').upsert(row, { onConflict: 'escalation_reason_id' });
+
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      escModal.classList.add('hidden');
+      await loadEscalationTemplates();
+    });
+  </script>
+</body>
+</html>
