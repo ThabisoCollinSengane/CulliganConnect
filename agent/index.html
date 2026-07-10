@@ -25,6 +25,7 @@
     <main class="main">
       <div class="card">
         <h2 id="welcome-msg">Welcome</h2>
+        <p class="motivation-line" id="welcome-motivation"></p>
         <p class="hint">Your priority list, today's numbers, and anything waiting on you.</p>
       </div>
 
@@ -64,10 +65,14 @@
     import { supabase } from '/js/supabaseClient.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
+    import { timeGreeting, motivationalLine } from '/js/greeting.js';
 
     const profile = await requireRole(['agent', 'admin']);
     if (profile) {
-      document.getElementById('welcome-msg').textContent = `Welcome back, ${profile.full_name || profile.email}`;
+      document.getElementById('welcome-msg').textContent = timeGreeting(profile.full_name || profile.email);
+      motivationalLine(supabase, profile.id).then(line => {
+        document.getElementById('welcome-motivation').textContent = line;
+      });
       renderMoodPicker();
       await Promise.all([
         loadTodayStats(),

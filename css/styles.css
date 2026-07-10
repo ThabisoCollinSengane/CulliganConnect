@@ -263,6 +263,12 @@ label {
   font-size: 0.82rem;
 }
 
+.motivation-line {
+  color: var(--accent-blue);
+  font-style: italic;
+  margin: 4px 0 0;
+}
+
 /* Login page */
 .login-wrap {
   min-height: 100vh;
