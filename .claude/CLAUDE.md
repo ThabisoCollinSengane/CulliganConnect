@@ -531,3 +531,55 @@ the browser).
 Not yet built: agent-facing dashboard/case list/case detail, escalation timer UI, reminders,
 mood check-in UI, @mention UI, ranking/reports, CSV/PDF export. These are Phases 2-5 from the
 roadmap above, now scoped against the real schema instead of the free-text v1 one.
+
+Deployed to Vercel: https://culliganconnect.vercel.app (production).
+
+---
+
+🤖 v3 Update – Backend Automation (2026-07-11)
+
+Added `supabase/migrations/20260711090000_backend_automation.sql` and a follow-up hardening
+migration, so the database — not the frontend — is the source of truth for these invariants:
+
+· `set_updated_at()` trigger on `profiles`, `cases`, `email_templates`, `escalation_templates` —
+  `updated_at` is never stale because a client forgot to set it.
+· `generate_case_number()` — `cases.case_number` is auto-assigned on insert from
+  `case_number_seq`, zero-padded to 8 digits (matches the spreadsheet's `00248484` format).
+  Never set `case_number` from the client.
+· `handle_case_status_change()` — on any `cases.status` change: writes `case_status_history`,
+  and specifically on entering `'escalated'`: stamps `escalated_at`/`escalated_by`, increments
+  `times_escalated`, computes `escalation_expires_at` from `escalation_timer_hours`, and inserts
+  an `escalation_audit` row. On leaving `'escalated'`, closes out the open `escalation_audit` row
+  and flags `was_overdue`. On entering/leaving `closed`/`resolved`, sets/clears `closed_at`.
+  Do not replicate this logic in the frontend — just update `cases.status` (and
+  `escalation_timer_hours` when escalating) and let the trigger do the rest.
+· `sync_case_department()` — `cases.department_id` always mirrors the assigned agent's
+  `profiles.department_id`; it is derived, not independently settable.
+· `sync_case_last_note()` — `cases.notes` (the list-view summary) is set from the newest
+  `case_notes.note` (truncated to 280 chars) automatically.
+· New `notifications` table (`user_id, type, title, body, data jsonb, is_read`) — generic
+  per-user notification inbox, RLS: users read/mark-read their own, admins all. This is what the
+  frontend's notification bell/unread badge should query.
+· New `org_settings` singleton table (`id boolean primary key check (id)`, one row) holds
+  `eod_stats_enabled`, `eod_stats_time`, `eod_stats_timezone` (default `18:00` `Europe/London`),
+  `eod_stats_last_run_date`. Readable by any authenticated user, writable by admins only.
+  `admin/settings.html` has a form to edit it.
+· `send_eod_stats(for_date date)` computes **collective/team-wide** numbers for that date
+  (cases closed, created, interacted-with, escalated, SLA breaches, top performer) and inserts
+  one `notifications` row per active profile (agents + admins) — not per-agent stats, by design.
+· `maybe_send_eod_stats()` runs every minute via `pg_cron` (job `eod-stats-check`, schedule
+  `* * * * *`), compares current time in `eod_stats_timezone` against `eod_stats_time`, and fires
+  `send_eod_stats()` at most once per calendar day (`eod_stats_last_run_date` guards against
+  double-sends). This is how "admin sets a time" turns into "fires once daily" without needing a
+  literal cron-expression edit per change — the cron job is fixed at 1-minute granularity and the
+  actual send time is data-driven from `org_settings`.
+· Security hardening: `handle_case_status_change`, `sync_case_department`, `sync_case_last_note`,
+  `maybe_send_eod_stats`, `send_eod_stats` all had `EXECUTE` revoked from `anon`/`authenticated` —
+  they're trigger functions / cron-only internals, not meant to be called directly via PostgREST
+  RPC (an agent could otherwise call `send_eod_stats` themselves and spam every user). Triggers
+  still fire fine without that grant. `set_updated_at`/`generate_case_number` got `search_path`
+  pinned per the Supabase linter. `is_admin()` is intentionally still public-callable — it only
+  reflects the caller's own session and leaks nothing.
+· All of the above was smoke-tested end-to-end against the live Supabase project (insert →
+  escalate → note → close → verify history/audit rows → `send_eod_stats` → verify notification →
+  cleanup) before being considered done, not just applied and assumed correct.

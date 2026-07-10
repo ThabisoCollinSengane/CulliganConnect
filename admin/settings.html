@@ -71,6 +71,31 @@
           <tbody id="escalation_reasons-body"></tbody>
         </table>
       </div>
+
+      <div class="card">
+        <h3>End-of-day team stats</h3>
+        <p class="hint">Every agent gets a notification with the team's collective numbers for the day (cases closed, escalations, top performer) at the time below.</p>
+        <form id="eod-form">
+          <div style="display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap;">
+            <div>
+              <label style="margin-top:0;">Send time</label>
+              <input type="time" id="eod-time" style="width:140px;" />
+            </div>
+            <div>
+              <label style="margin-top:0;">Timezone</label>
+              <input type="text" id="eod-timezone" style="width:160px;" />
+            </div>
+            <div style="padding-bottom:10px;">
+              <label style="margin-top:0; display:flex; align-items:center; gap:6px;">
+                <input type="checkbox" id="eod-enabled" style="width:auto;" /> Enabled
+              </label>
+            </div>
+            <button class="btn" type="submit">Save</button>
+          </div>
+          <p class="success-text hidden" id="eod-success">Saved.</p>
+          <p class="error-text hidden" id="eod-error"></p>
+        </form>
+      </div>
     </main>
   </div>
 
@@ -85,6 +110,7 @@
         loadSimpleTable('case_types', ['name']),
         loadServiceCentres(),
         loadEscalationReasons(),
+        loadEodSettings(),
       ]);
     }
 
@@ -180,6 +206,35 @@
         tbody.appendChild(tr);
       }
     }
+
+    async function loadEodSettings() {
+      const { data } = await supabase.from('org_settings').select('*').eq('id', true).single();
+      if (!data) return;
+      document.getElementById('eod-time').value = data.eod_stats_time?.slice(0, 5) || '18:00';
+      document.getElementById('eod-timezone').value = data.eod_stats_timezone || 'Europe/London';
+      document.getElementById('eod-enabled').checked = !!data.eod_stats_enabled;
+    }
+
+    document.getElementById('eod-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const successEl = document.getElementById('eod-success');
+      const errorEl = document.getElementById('eod-error');
+      successEl.classList.add('hidden');
+      errorEl.classList.add('hidden');
+
+      const { error } = await supabase.from('org_settings').update({
+        eod_stats_time: document.getElementById('eod-time').value,
+        eod_stats_timezone: document.getElementById('eod-timezone').value.trim(),
+        eod_stats_enabled: document.getElementById('eod-enabled').checked,
+      }).eq('id', true);
+
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      successEl.classList.remove('hidden');
+    });
   </script>
 </body>
 </html>
