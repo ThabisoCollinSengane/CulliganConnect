@@ -1002,3 +1002,43 @@ hover style in styles.css.
   variable override so dark mode never prints dark backgrounds. Note: this sandbox's proxy can't
   reach esm.sh, so the import was not curl-verified here — it uses the exact CDN the deployed
   site already depends on.
+
+---
+
+🔧 v14 Update – Four launch-readiness fixes + a real security fix (2026-07-11)
+
+User asked for the four small fixes (no custom domain, no in-app email sending — copy/paste stays).
+
+· **Interacted-stat attribution**: "cases interacted" counted notes on cases *assigned to* an
+  agent (`case_notes ⋈ cases.assigned_to`). After the shared-queue change that credited the wrong
+  person — a note you write on a colleague's case counted for them. Now counts distinct cases the
+  agent *personally* noted (`case_notes.user_id = agent`), across My Day stats, the mini
+  leaderboard, `agent/settings.html` `metricValue('cases_interacted')` (team-target null case =
+  whole-team total, still correct), and `admin/reports.html`.
+· **`{QTY}` token now fills** (`20260711190000_case_quantity_and_prebreach.sql`): added
+  `cases.quantity int` (advertised on the admin templates page but never populated). Wired into
+  the new-case modal (`agent/cases.html`), the case detail grid, and `tokenValues()` in
+  `agent/case.html`. Set at creation, read-only after — consistent with account/task fields.
+· **Admin in-app notification inbox**: admins had browser-push only (missed alerts if no tab
+  open). `admin/index.html` now has a "🔔 Notifications" card using the same list + realtime
+  refresh + click-through-to-case pattern as the agent dashboard (case links go to
+  `/agent/case.html`, which admins can already open).
+· **Pre-breach SLA warning** (same migration): new `notify_prebreach_escalations()` +
+  `cases.escalation_prebreach_notified` flag + pg_cron `prebreach-escalation-check` (every 5 min).
+  Notifies the assigned agent once when an escalation is within 30 min of its SLA and hasn't
+  breached yet (`escalation_prebreach` type). `handle_case_status_change` resets both the prebreach
+  and overdue flags on (re-)escalation / timer change.
+
+**Security fix found while verifying (important):** `has_function_privilege('anon', …)` showed the
+notification fan-out functions were **executable by `anon` and `authenticated`**. Root cause:
+Supabase grants EXECUTE to anon/authenticated on newly-created public functions via an *explicit*
+grant, and the v9/v11 "hardening" only did `revoke … from public` — which never touches those
+explicit role grants. So `notify_overdue_escalations`, `notify_prebreach_escalations` and
+`send_weekly_digest` were callable by any signed-in user (notification spam / forced digest sends).
+Fixed with `revoke execute … from public, anon, authenticated`
+(`20260711190100_harden_notification_functions.sql`), verified `anon_exec/auth_exec = false`, and
+back-patched the v9/v11 migration files so a fresh deploy is secure too. (The older
+`send_eod_stats`/`maybe_send_eod_stats`/`notify_case_mention` were already correctly locked —
+they predate the create-time re-grant, hence the discrepancy.) **Lesson for future
+security-definer functions: always `revoke execute from public, anon, authenticated`, never just
+`from public`, and verify with `has_function_privilege`.**

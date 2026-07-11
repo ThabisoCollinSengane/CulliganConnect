@@ -172,8 +172,8 @@
         const [{ count: closed }, { data: notes }, { count: escalated }, { count: slaBreaches }, { data: calls }] = await Promise.all([
           supabase.from('cases').select('id', { count: 'exact', head: true })
             .eq('closed_by', agent.id).gte('closed_at', from.toISOString()).lte('closed_at', to.toISOString()),
-          supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
-            .eq('cases.assigned_to', agent.id).gte('created_at', from.toISOString()).lte('created_at', to.toISOString()),
+          supabase.from('case_notes').select('case_id')
+            .eq('user_id', agent.id).gte('created_at', from.toISOString()).lte('created_at', to.toISOString()),
           supabase.from('cases').select('id', { count: 'exact', head: true })
             .eq('assigned_to', agent.id).gte('escalated_at', from.toISOString()).lte('escalated_at', to.toISOString()),
           supabase.from('cases').select('id', { count: 'exact', head: true })

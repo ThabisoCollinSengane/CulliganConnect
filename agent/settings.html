@@ -141,9 +141,9 @@
         return count || 0;
       }
       if (metric === 'cases_interacted') {
-        let q = supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
+        let q = supabase.from('case_notes').select('case_id')
           .gte('created_at', from.toISOString()).lt('created_at', to.toISOString());
-        if (agentId) q = q.eq('cases.assigned_to', agentId);
+        if (agentId) q = q.eq('user_id', agentId);
         const { data } = await q;
         return new Set((data || []).map(n => n.case_id)).size;
       }

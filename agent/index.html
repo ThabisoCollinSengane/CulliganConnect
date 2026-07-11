@@ -298,8 +298,8 @@
         const [{ count: closed }, { data: notes }] = await Promise.all([
           supabase.from('cases').select('id', { count: 'exact', head: true })
             .eq('closed_by', a.id).gte('closed_at', monthStart.toISOString()),
-          supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
-            .eq('cases.assigned_to', a.id).gte('created_at', monthStart.toISOString()),
+          supabase.from('case_notes').select('case_id')
+            .eq('user_id', a.id).gte('created_at', monthStart.toISOString()),
         ]);
         const interacted = new Set((notes || []).map(n => n.case_id)).size;
         return { agent: a, weighted: (closed || 0) * 2 + interacted };
@@ -379,8 +379,8 @@
       const [{ count: closed }, { data: notes }, { count: escalated }, { count: open }] = await Promise.all([
         supabase.from('cases').select('id', { count: 'exact', head: true })
           .eq('closed_by', profile.id).gte('closed_at', iso),
-        supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
-          .eq('cases.assigned_to', profile.id).gte('created_at', iso),
+        supabase.from('case_notes').select('case_id')
+          .eq('user_id', profile.id).gte('created_at', iso),
         supabase.from('cases').select('id', { count: 'exact', head: true })
           .eq('assigned_to', profile.id).gte('escalated_at', iso),
         supabase.from('cases').select('id', { count: 'exact', head: true })

@@ -39,7 +39,7 @@ begin
 end;
 $$;
 
-revoke execute on function public.send_weekly_digest() from public;
+revoke execute on function public.send_weekly_digest() from public, anon, authenticated;
 
 select cron.unschedule(jobid) from cron.job where jobname = 'weekly-digest';
 select cron.schedule('weekly-digest', '0 7 * * 1', $$select public.send_weekly_digest();$$);
