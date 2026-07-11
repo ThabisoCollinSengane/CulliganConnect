@@ -59,6 +59,12 @@
         </div>
       </div>
 
+      <div class="card hidden" id="due-reminders-card" style="border-left:4px solid var(--orange);">
+        <h3 style="margin:0 0 4px;">⏰ Due reminders</h3>
+        <p class="hint" style="margin:0 0 8px;">These are due now. Click a detail to copy it.</p>
+        <div id="due-reminders-list"></div>
+      </div>
+
       <div class="card">
         <div class="toolbar">
           <h3 style="margin:0;">📞 Calls today</h3>
@@ -109,6 +115,7 @@
 
   <script type="module">
     import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
     import { timeGreeting, motivationalLine } from '/js/greeting.js';
@@ -136,7 +143,86 @@
         loadTodayMood(),
         loadCallsToday(),
         loadMiniLeaderboard(),
+        loadDueReminders(),
       ]);
+    }
+
+    async function loadDueReminders() {
+      const { data } = await supabase
+        .from('reminders')
+        .select('id, reminder_at, note, case_id, quick_notes(customer_name, business_name, phone, email, account_number, task_number, note)')
+        .eq('user_id', profile.id)
+        .eq('is_dismissed', false)
+        .lte('reminder_at', new Date().toISOString())
+        .order('reminder_at', { ascending: true })
+        .limit(10);
+
+      const card = document.getElementById('due-reminders-card');
+      const list = document.getElementById('due-reminders-list');
+      list.innerHTML = '';
+
+      if (!data || data.length === 0) {
+        card.classList.add('hidden');
+        return;
+      }
+      card.classList.remove('hidden');
+
+      const DETAILS = [
+        ['customer_name', 'Customer'],
+        ['business_name', 'Business'],
+        ['phone', 'Number'],
+        ['email', 'Email'],
+        ['account_number', 'Account #'],
+        ['task_number', 'Task #'],
+      ];
+
+      for (const r of data) {
+        const qn = r.quick_notes;
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:10px 0; border-bottom:1px solid var(--border);';
+
+        let detailsHtml = '';
+        if (qn) {
+          const chips = DETAILS.filter(([key]) => qn[key]).map(([key, label]) =>
+            `<button type="button" class="btn secondary copy-detail" data-value="${(qn[key] || '').replace(/"/g, '&quot;')}" style="padding:2px 10px; font-size:0.78rem;">${label}: ${qn[key]}</button>`
+          ).join(' ');
+          detailsHtml = `
+            ${qn.note ? `<div class="hint" style="white-space:pre-wrap; margin-top:4px;">${qn.note}</div>` : ''}
+            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">${chips}</div>
+          `;
+        }
+
+        row.innerHTML = `
+          <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+            <div>
+              <strong>${new Date(r.reminder_at).toLocaleString()}</strong> — ${r.note || 'Reminder'}
+              ${detailsHtml}
+            </div>
+            <div style="display:flex; gap:6px; flex-shrink:0;">
+              ${r.case_id ? `<a class="btn secondary" style="padding:4px 12px;" href="/agent/case.html?id=${r.case_id}">Open case</a>` : ''}
+              <button class="btn secondary dismiss-reminder" style="padding:4px 12px;">Dismiss</button>
+            </div>
+          </div>
+        `;
+
+        row.querySelectorAll('.copy-detail').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            try {
+              await navigator.clipboard.writeText(btn.dataset.value);
+              const original = btn.textContent;
+              btn.textContent = '✓ Copied';
+              setTimeout(() => { btn.textContent = original; }, 1500);
+            } catch {
+              alert(btn.dataset.value);
+            }
+          });
+        });
+        row.querySelector('.dismiss-reminder').addEventListener('click', async () => {
+          await supabase.from('reminders').update({ is_dismissed: true }).eq('id', r.id);
+          await loadDueReminders();
+        });
+        list.appendChild(row);
+      }
     }
 
     async function loadDailyTarget() {
@@ -211,7 +297,7 @@
       const rows = await Promise.all((agentList || []).map(async (a) => {
         const [{ count: closed }, { data: notes }] = await Promise.all([
           supabase.from('cases').select('id', { count: 'exact', head: true })
-            .eq('assigned_to', a.id).gte('closed_at', monthStart.toISOString()),
+            .eq('closed_by', a.id).gte('closed_at', monthStart.toISOString()),
           supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
             .eq('cases.assigned_to', a.id).gte('created_at', monthStart.toISOString()),
         ]);
@@ -292,7 +378,7 @@
 
       const [{ count: closed }, { data: notes }, { count: escalated }, { count: open }] = await Promise.all([
         supabase.from('cases').select('id', { count: 'exact', head: true })
-          .eq('assigned_to', profile.id).gte('closed_at', iso),
+          .eq('closed_by', profile.id).gte('closed_at', iso),
         supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
           .eq('cases.assigned_to', profile.id).gte('created_at', iso),
         supabase.from('cases').select('id', { count: 'exact', head: true })

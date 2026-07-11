@@ -58,7 +58,8 @@
         <p class="hint">Personal reminders not tied to a specific case.</p>
         <form id="reminder-form" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-top:12px;">
           <div><label style="margin-top:0;">When</label><input type="datetime-local" id="reminder-at" required /></div>
-          <div style="flex:1; min-width:200px;"><label style="margin-top:0;">Note</label><input id="reminder-note" /></div>
+          <div style="flex:1; min-width:180px;"><label style="margin-top:0;">Note</label><input id="reminder-note" /></div>
+          <div style="flex:1; min-width:200px;"><label style="margin-top:0;">Attach a saved note (optional)</label><select id="reminder-note-link"><option value="">— none —</option></select></div>
           <button class="btn" type="submit">Add reminder</button>
         </form>
         <div id="reminders-list" style="margin-top:16px;"></div>
@@ -100,10 +101,20 @@
   </div>
 
   <div class="modal-backdrop hidden" id="note-modal-backdrop">
-    <div class="modal">
-      <h3>New note</h3>
+    <div class="modal" style="max-width:560px;">
+      <h3 id="note-modal-title">New note</h3>
       <form id="note-form">
-        <textarea id="qn-text" rows="8" placeholder="Write a note…" required style="font-family: ui-monospace, monospace;"></textarea>
+        <input type="hidden" id="qn-id" />
+        <textarea id="qn-text" rows="6" placeholder="Write a note…" required style="font-family: ui-monospace, monospace;"></textarea>
+        <p class="hint" style="margin:10px 0 0;">Customer details (optional) — copy them in one click when a reminder comes due.</p>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 14px;">
+          <div class="form-row"><label>Customer name</label><input id="qn-customer" /></div>
+          <div class="form-row"><label>Business name</label><input id="qn-business" /></div>
+          <div class="form-row"><label>Number</label><input id="qn-phone" /></div>
+          <div class="form-row"><label>Email</label><input id="qn-email" type="email" /></div>
+          <div class="form-row"><label>Account number</label><input id="qn-account" /></div>
+          <div class="form-row"><label>Task number</label><input id="qn-task" /></div>
+        </div>
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="qn-cancel">Cancel</button>
           <button type="submit" class="btn">Save</button>
@@ -114,6 +125,7 @@
 
   <script type="module">
     import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { copyToClipboard } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
@@ -303,6 +315,25 @@
     });
 
     // ---- Quick notes (notepad) ----
+    const NOTE_DETAIL_FIELDS = [
+      ['customer_name', 'Customer'],
+      ['business_name', 'Business'],
+      ['phone', 'Number'],
+      ['email', 'Email'],
+      ['account_number', 'Account #'],
+      ['task_number', 'Task #'],
+    ];
+
+    function noteDetailChips(n) {
+      return NOTE_DETAIL_FIELDS
+        .filter(([key]) => n[key])
+        .map(([key, label]) =>
+          `<span class="badge blue" style="margin:2px 4px 2px 0;">${label}: ${n[key]}</span>`)
+        .join('');
+    }
+
+    let myQuickNotes = [];
+
     async function loadQuickNotes() {
       const { data, error } = await supabase.from('quick_notes').select('*').order('updated_at', { ascending: false });
       const list = document.getElementById('quick-notes-list');
@@ -312,22 +343,32 @@
         list.innerHTML = `<p class="error-text">${error.message}</p>`;
         return;
       }
-      if (!data || data.length === 0) {
+
+      myQuickNotes = data || [];
+      populateReminderNoteSelect();
+
+      if (myQuickNotes.length === 0) {
         list.innerHTML = '<p class="hint">Nothing jotted down yet.</p>';
         return;
       }
 
-      for (const n of data) {
+      for (const n of myQuickNotes) {
         const div = document.createElement('div');
         div.style.cssText = 'background: var(--light-blue); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;';
         div.innerHTML = `
           <div style="display:flex; justify-content:space-between; gap:10px;">
             <span class="hint">${new Date(n.updated_at).toLocaleString()}</span>
-            <button class="btn secondary delete-note-btn" style="padding:2px 10px;">Delete</button>
+            <div style="display:flex; gap:6px;">
+              <button class="btn secondary edit-note-btn" style="padding:2px 10px;">Edit</button>
+              <button class="btn secondary delete-note-btn" style="padding:2px 10px;">Delete</button>
+            </div>
           </div>
           <p style="white-space:pre-wrap; font-family: ui-monospace, monospace; margin: 6px 0 0;">${n.note}</p>
+          <div style="margin-top:6px;">${noteDetailChips(n)}</div>
         `;
+        div.querySelector('.edit-note-btn').addEventListener('click', () => openNoteModal(n));
         div.querySelector('.delete-note-btn').addEventListener('click', async () => {
+          if (!confirm('Delete this note?')) return;
           await supabase.from('quick_notes').delete().eq('id', n.id);
           await loadQuickNotes();
         });
@@ -336,27 +377,64 @@
     }
 
     const noteModal = document.getElementById('note-modal-backdrop');
-    document.getElementById('new-note-btn').addEventListener('click', () => {
+
+    function openNoteModal(n) {
       document.getElementById('note-form').reset();
+      document.getElementById('note-modal-title').textContent = n ? 'Edit note' : 'New note';
+      document.getElementById('qn-id').value = n?.id || '';
+      document.getElementById('qn-text').value = n?.note || '';
+      document.getElementById('qn-customer').value = n?.customer_name || '';
+      document.getElementById('qn-business').value = n?.business_name || '';
+      document.getElementById('qn-phone').value = n?.phone || '';
+      document.getElementById('qn-email').value = n?.email || '';
+      document.getElementById('qn-account').value = n?.account_number || '';
+      document.getElementById('qn-task').value = n?.task_number || '';
       noteModal.classList.remove('hidden');
-    });
+    }
+
+    document.getElementById('new-note-btn').addEventListener('click', () => openNoteModal(null));
     document.getElementById('qn-cancel').addEventListener('click', () => noteModal.classList.add('hidden'));
 
     document.getElementById('note-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      await supabase.from('quick_notes').insert({
-        user_id: profile.id,
+      const id = document.getElementById('qn-id').value;
+      const payload = {
         note: document.getElementById('qn-text').value,
-      });
+        customer_name: document.getElementById('qn-customer').value.trim() || null,
+        business_name: document.getElementById('qn-business').value.trim() || null,
+        phone: document.getElementById('qn-phone').value.trim() || null,
+        email: document.getElementById('qn-email').value.trim() || null,
+        account_number: document.getElementById('qn-account').value.trim() || null,
+        task_number: document.getElementById('qn-task').value.trim() || null,
+      };
+
+      const { error } = id
+        ? await supabase.from('quick_notes').update(payload).eq('id', id)
+        : await supabase.from('quick_notes').insert({ ...payload, user_id: profile.id });
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
       noteModal.classList.add('hidden');
       await loadQuickNotes();
     });
 
     // ---- Standalone reminders ----
+    function populateReminderNoteSelect() {
+      const select = document.getElementById('reminder-note-link');
+      const current = select.value;
+      select.innerHTML = '<option value="">— none —</option>' + myQuickNotes.map(n => {
+        const label = n.customer_name || n.business_name || n.note.slice(0, 40);
+        return `<option value="${n.id}">${label}</option>`;
+      }).join('');
+      select.value = current;
+    }
+
     async function loadReminders() {
       const { data, error } = await supabase
         .from('reminders')
-        .select('id, reminder_at, note, is_dismissed')
+        .select('id, reminder_at, note, is_dismissed, quick_notes(customer_name, business_name, phone, email, account_number, task_number)')
         .eq('user_id', profile.id)
         .is('case_id', null)
         .order('reminder_at', { ascending: true });
@@ -374,10 +452,15 @@
       }
 
       for (const r of data) {
+        const qn = r.quick_notes;
+        const linked = qn ? `<div style="margin-top:4px;">${noteDetailChips(qn)}</div>` : '';
         const div = document.createElement('div');
-        div.style.cssText = 'padding:8px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:10px;';
+        div.style.cssText = 'padding:8px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:10px; align-items:flex-start;';
         div.innerHTML = `
-          <span>${r.is_dismissed ? '<s>' : ''}${new Date(r.reminder_at).toLocaleString()} — ${r.note || ''}${r.is_dismissed ? '</s>' : ''}</span>
+          <div>
+            <span>${r.is_dismissed ? '<s>' : ''}${new Date(r.reminder_at).toLocaleString()} — ${r.note || ''}${r.is_dismissed ? '</s>' : ''}</span>
+            ${linked}
+          </div>
           <button class="btn secondary dismiss-btn" data-id="${r.id}" ${r.is_dismissed ? 'disabled' : ''}>${r.is_dismissed ? 'Done' : 'Dismiss'}</button>
         `;
         list.appendChild(div);
@@ -395,12 +478,14 @@
       e.preventDefault();
       const reminderAt = document.getElementById('reminder-at').value;
       const note = document.getElementById('reminder-note').value.trim();
+      const linkedNote = document.getElementById('reminder-note-link').value || null;
 
       const { error } = await supabase.from('reminders').insert({
         case_id: null,
         user_id: profile.id,
         reminder_at: new Date(reminderAt).toISOString(),
         note,
+        quick_note_id: linkedNote,
       });
 
       if (error) {

@@ -83,6 +83,7 @@
           </div>
           <button class="btn" id="save-status-btn">Save</button>
           <button class="btn" id="close-case-btn" style="background:var(--green);">✅ Close case</button>
+          <button class="btn secondary hidden" id="assign-me-btn">🙋 Assign to me</button>
         </div>
         <p class="hint" id="close-hint" style="margin-top:8px;">Closing an escalated case ends its SLA timer and counts toward your daily target.</p>
         <p class="error-text hidden" id="status-error"></p>
@@ -133,6 +134,18 @@
       </div>
 
       <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">📎 Attachments</h3>
+          <label class="btn secondary" style="margin:0; cursor:pointer;">
+            Upload file<input type="file" id="attachment-input" style="display:none;" />
+          </label>
+        </div>
+        <p class="hint">Screenshots, depot emails, PODs — keep the evidence with the case. Max 10&nbsp;MB per file.</p>
+        <p class="error-text hidden" id="attachment-error"></p>
+        <div id="attachments-list" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="card">
         <h3>History</h3>
         <div id="history-list"></div>
       </div>
@@ -141,6 +154,7 @@
 
   <script type="module">
     import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { statusBadge, escalationCountdown, fillTemplate, copyToClipboard } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
@@ -160,6 +174,7 @@
       await loadNotes();
       await loadReminders();
       await loadHistory();
+      await loadAttachments();
       initNoteDraft();
     }
 
@@ -266,6 +281,7 @@
     }
 
     function renderStatusForm() {
+      document.getElementById('assign-me-btn').classList.toggle('hidden', currentCase.assigned_to === profile.id);
       document.getElementById('status-select').value = currentCase.status;
       document.getElementById('escalation-fields').classList.toggle('hidden', currentCase.status !== 'escalated');
       if (currentCase.escalation_reason_id) document.getElementById('escalation-reason').value = currentCase.escalation_reason_id;
@@ -305,6 +321,25 @@
       }
       await loadCase();
       await loadHistory();
+    });
+
+    document.getElementById('assign-me-btn').addEventListener('click', async () => {
+      const errorEl = document.getElementById('status-error');
+      errorEl.classList.add('hidden');
+
+      const { data: updated, error } = await supabase.from('cases')
+        .update({ assigned_to: profile.id }).eq('id', caseId).select('id');
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      if (!updated || updated.length === 0) {
+        errorEl.textContent = 'Only unassigned or escalated cases can be claimed. Ask an admin to reassign this one.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      await loadCase();
     });
 
     document.getElementById('close-case-btn').addEventListener('click', async () => {
@@ -517,6 +552,99 @@
       }
       document.getElementById('reminder-form').reset();
       await loadReminders();
+    });
+
+    // ---- Attachments ----
+    async function loadAttachments() {
+      const { data, error } = await supabase
+        .from('case_attachments')
+        .select('id, file_name, storage_path, size_bytes, created_at, uploaded_by, profiles(full_name)')
+        .eq('case_id', caseId)
+        .order('created_at', { ascending: false });
+
+      const list = document.getElementById('attachments-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No attachments yet.</p>';
+        return;
+      }
+
+      for (const a of data) {
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:8px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:10px; align-items:center;';
+        const sizeKb = a.size_bytes ? `${Math.max(1, Math.round(a.size_bytes / 1024))} KB · ` : '';
+        row.innerHTML = `
+          <div>
+            <a href="#" class="open-attachment">${a.file_name}</a>
+            <div class="hint">${sizeKb}${a.profiles?.full_name || 'Unknown'} · ${new Date(a.created_at).toLocaleString()}</div>
+          </div>
+          ${a.uploaded_by === profile.id ? '<button class="btn secondary delete-attachment" style="padding:4px 12px;">Delete</button>' : ''}
+        `;
+        row.querySelector('.open-attachment').addEventListener('click', async (e) => {
+          e.preventDefault();
+          const { data: signed, error: signError } = await supabase.storage
+            .from('case-attachments').createSignedUrl(a.storage_path, 300);
+          if (signError || !signed?.signedUrl) {
+            alert(signError?.message || 'Could not open file.');
+            return;
+          }
+          window.open(signed.signedUrl, '_blank');
+        });
+        row.querySelector('.delete-attachment')?.addEventListener('click', async () => {
+          if (!confirm(`Delete "${a.file_name}"?`)) return;
+          await supabase.storage.from('case-attachments').remove([a.storage_path]);
+          await supabase.from('case_attachments').delete().eq('id', a.id);
+          await loadAttachments();
+        });
+        list.appendChild(row);
+      }
+    }
+
+    document.getElementById('attachment-input').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      const errorEl = document.getElementById('attachment-error');
+      errorEl.classList.add('hidden');
+      if (!file) return;
+
+      if (file.size > 10 * 1024 * 1024) {
+        errorEl.textContent = 'File is over 10 MB.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      const safeName = file.name.replace(/[^\w.\-()\s]/g, '_');
+      const path = `${caseId}/${Date.now()}-${safeName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('case-attachments')
+        .upload(path, file, { contentType: file.type || 'application/octet-stream' });
+      if (uploadError) {
+        errorEl.textContent = uploadError.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      const { error: metaError } = await supabase.from('case_attachments').insert({
+        case_id: caseId,
+        uploaded_by: profile.id,
+        file_name: file.name,
+        storage_path: path,
+        content_type: file.type || null,
+        size_bytes: file.size,
+      });
+      if (metaError) {
+        await supabase.storage.from('case-attachments').remove([path]);
+        errorEl.textContent = metaError.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      await loadAttachments();
     });
 
     async function loadHistory() {

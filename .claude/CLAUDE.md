@@ -898,3 +898,47 @@ Five user-reported fixes, two of which turned out to be real backend bugs found 
 · **Calls widget takes a typed value**: the "+1 Call" button is now a number input + Add button
   (add 1 or a batch, e.g. 5 after a busy spell), validated ≥1, errors surfaced instead of
   swallowed.
+
+---
+
+🚀 v11 Update – Approved suggestion batch (2026-07-11)
+
+All eight items the user approved from the v10 suggestion list, in one batch:
+
+· **Credit the closer** (`20260711170000_closed_by_attribution.sql`): new `cases.closed_by`
+  set by `handle_case_status_change` (`coalesce(auth.uid(), …, assigned_to)`; cleared on reopen),
+  backfilled from the latest close/resolve transition in `case_status_history`. Every closed-case
+  stat now counts `closed_by` instead of `assigned_to`: My Day today-stat + meter, mini
+  leaderboard, settings `metricValue('cases_closed')`, admin reports, `js/greeting.js`, and the
+  EOD top performer (`20260711170400_eod_top_performer_closed_by.sql` — re-applied verbatim
+  except the one column swap after a first attempt accidentally simplified the notification's
+  `data` payload; watch for that when editing functions you can't fully see).
+· **"Assign to me"** (same migration): update policy widened to `assigned_to is null` cases, so
+  unassigned or escalated cases can be claimed; button on `agent/case.html` appears whenever the
+  case isn't yours, with the friendly-error pattern for RLS silent-0-rows.
+· **Callback-notes workflow** (`20260711170100_callback_notes.sql` — the user's own spec):
+  `quick_notes` gains structured fields (customer_name, business_name, phone, email,
+  account_number, task_number); notes are now editable (modal doubles for create/edit);
+  `reminders.quick_note_id` links a reminder to a saved note; a "⏰ Due reminders" card on My Day
+  lists due-and-undismissed reminders with the linked note's details as **click-to-copy** buttons.
+· **Case attachments** (`20260711170200_case_attachments.sql`): private `case-attachments`
+  storage bucket + `case_attachments` metadata table (team read, uploader insert/delete, admin
+  all — both on the table and on `storage.objects`). Upload card on `agent/case.html`, 10 MB
+  client-side cap, opened via 5-minute signed URLs; metadata insert failure rolls back the upload.
+· **Search inside notes** (`agent/cases.html`): search now also greps `case_notes.note` via
+  `ilike`, folding matching case ids into the main query's `.or()` as `id.in.(…)`.
+· **Weekly digest** (`20260711170300_weekly_digest.sql`): `send_weekly_digest()` per active
+  agent — closed (by closer), calls, escalations raised, rank of N — as a `weekly_digest`
+  notification; pg_cron `weekly-digest`, Mondays 07:00 UTC (~08:00 London in summer). Tested via
+  `begin; select send_weekly_digest(); …; rollback;` so no real notifications were sent.
+· **Mood insights for admins** (`admin/index.html`): "💙 Team morale (last 7 days)" — bar per
+  mood plus a "check in with" flag for agents with ≥3 stressed/overwhelmed check-ins in the week.
+  No schema change needed; `admins_read_all_mood` policy already existed.
+· **Dark mode**: `js/theme.js` (imported for side effects by all 13 pages) applies the saved
+  theme from localStorage (`culligan-theme`) and injects a 🌙/☀️ toggle into the header nav.
+  Because the palette was already used semantically (`--white` = surfaces, `--dark-blue` = text,
+  `--light-blue` = page bg), dark mode is mostly a variable remap under
+  `:root[data-theme="dark"]` + badge-color overrides. Hardcoded one-off colours were made
+  theme-agnostic where they'd clash (overdue card tint → rgba).
+
+Deliberately NOT built (not selected by user): pre-breach SLA warning notification.

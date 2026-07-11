@@ -95,6 +95,7 @@
 
   <script type="module">
     import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { copyToClipboard } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
@@ -170,7 +171,7 @@
       const rows = await Promise.all((agentList || []).map(async (agent) => {
         const [{ count: closed }, { data: notes }, { count: escalated }, { count: slaBreaches }, { data: calls }] = await Promise.all([
           supabase.from('cases').select('id', { count: 'exact', head: true })
-            .eq('assigned_to', agent.id).gte('closed_at', from.toISOString()).lte('closed_at', to.toISOString()),
+            .eq('closed_by', agent.id).gte('closed_at', from.toISOString()).lte('closed_at', to.toISOString()),
           supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
             .eq('cases.assigned_to', agent.id).gte('created_at', from.toISOString()).lte('created_at', to.toISOString()),
           supabase.from('cases').select('id', { count: 'exact', head: true })

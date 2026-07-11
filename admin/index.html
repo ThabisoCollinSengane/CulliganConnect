@@ -59,6 +59,13 @@
       </a>
 
       <div class="card">
+        <h3 style="margin:0 0 4px;">💙 Team morale (last 7 days)</h3>
+        <p class="hint" style="margin:0 0 10px;">From the daily mood check-in on agents' dashboards. Sustained stress gets flagged below.</p>
+        <div id="mood-bars"></div>
+        <div id="mood-flags" style="margin-top:10px;"></div>
+      </div>
+
+      <div class="card">
         <h3>Agents by department</h3>
         <table id="dept-table">
           <thead><tr><th>Department</th><th>Agents</th></tr></thead>
@@ -70,6 +77,7 @@
 
   <script type="module">
     import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { timeGreeting, teamMotivationalLine } from '/js/greeting.js';
     import { subscribeToNotifications } from '/js/notifications.js';
@@ -81,13 +89,70 @@
       teamMotivationalLine(supabase).then(line => {
         document.getElementById('welcome-motivation').textContent = line;
       });
-      await loadStats();
+      await Promise.all([loadStats(), loadMoodInsights()]);
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
       e.preventDefault();
       signOut();
     });
+
+    async function loadMoodInsights() {
+      const weekAgo = new Date();
+      weekAgo.setDate(weekAgo.getDate() - 7);
+
+      const { data, error } = await supabase
+        .from('agent_mood_log')
+        .select('mood, agent_id, logged_at, profiles(full_name)')
+        .gte('logged_at', weekAgo.toISOString().slice(0, 10));
+
+      const bars = document.getElementById('mood-bars');
+      const flags = document.getElementById('mood-flags');
+
+      if (error) {
+        bars.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        bars.innerHTML = '<p class="hint">No mood check-ins yet this week.</p>';
+        flags.innerHTML = '';
+        return;
+      }
+
+      const MOODS = [
+        ['great', '😄 Great', 'var(--green)'],
+        ['good', '🙂 Good', 'var(--accent-blue)'],
+        ['okay', '😐 Okay', 'var(--text-muted)'],
+        ['stressed', '😣 Stressed', 'var(--orange)'],
+        ['overwhelmed', '🥵 Overwhelmed', 'var(--red)'],
+      ];
+      const counts = Object.fromEntries(MOODS.map(([key]) => [key, 0]));
+      for (const row of data) if (counts[row.mood] !== undefined) counts[row.mood]++;
+      const max = Math.max(1, ...Object.values(counts));
+
+      bars.innerHTML = MOODS.map(([key, label, color]) => `
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+          <div style="width:140px; font-size:0.85rem;">${label}</div>
+          <div style="flex:1; background:var(--light-blue); border-radius:6px; height:14px; overflow:hidden;">
+            <div style="width:${Math.round((counts[key] / max) * 100)}%; height:100%; background:${color}; border-radius:6px;"></div>
+          </div>
+          <div style="width:30px; text-align:right; font-weight:600;">${counts[key]}</div>
+        </div>
+      `).join('');
+
+      // Flag agents with 3+ stressed/overwhelmed check-ins this week.
+      const strained = {};
+      for (const row of data) {
+        if (row.mood === 'stressed' || row.mood === 'overwhelmed') {
+          const name = row.profiles?.full_name || 'Unknown';
+          strained[name] = (strained[name] || 0) + 1;
+        }
+      }
+      const flagged = Object.entries(strained).filter(([, n]) => n >= 3);
+      flags.innerHTML = flagged.length
+        ? `<p style="margin:0;"><span class="badge orange">Check in with:</span> ${flagged.map(([name, n]) => `${name} (${n}× this week)`).join(', ')}</p>`
+        : '<p class="hint" style="margin:0;">No sustained stress flags this week. 👍</p>';
+    }
 
     async function loadStats() {
       const [{ count: agentCount }, { data: departments }, { count: centreCount }, { count: openCases }, { count: overdueCount }] = await Promise.all([
@@ -103,7 +168,7 @@
       document.getElementById('stat-service-centres').textContent = centreCount ?? 0;
       document.getElementById('stat-cases-open').textContent = openCases ?? 0;
       document.getElementById('stat-overdue').textContent = overdueCount ?? 0;
-      document.getElementById('escalation-risk-card').style.background = overdueCount ? '#FCEBEB' : '';
+      document.getElementById('escalation-risk-card').style.background = overdueCount ? 'rgba(211, 47, 47, 0.12)' : '';
 
       const tbody = document.querySelector('#dept-table tbody');
       tbody.innerHTML = '';

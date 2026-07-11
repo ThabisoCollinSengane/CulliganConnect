@@ -34,7 +34,7 @@
         </div>
         <p class="hint" style="margin-top:-8px;">Tip: press <kbd>n</kbd> for a new case, <kbd>/</kbd> to search. Escalated cases can be actioned and closed by anyone on the team.</p>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
-          <input id="search-input" placeholder="Search case #, account #, or customer name…" style="flex:2; min-width:220px;" />
+          <input id="search-input" placeholder="Search case #, account #, customer, or note text…" style="flex:2; min-width:220px;" />
           <select id="mine-filter" style="flex:1; min-width:140px;">
             <option value="mine" selected>My cases</option>
             <option value="all">Whole team</option>
@@ -96,6 +96,7 @@
 
   <script type="module">
     import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
@@ -161,7 +162,19 @@
       if (document.getElementById('mine-filter').value === 'mine') query = query.eq('assigned_to', profile.id);
       if (status) query = query.eq('status', status);
       if (typeId) query = query.eq('case_type_id', typeId);
-      if (search) query = query.or(`case_number.ilike.%${search}%,account_number.ilike.%${search}%,customer_name.ilike.%${search}%`);
+      if (search) {
+        // Also match note text, so "that case where the depot promised a refund" is findable.
+        const { data: noteMatches } = await supabase
+          .from('case_notes').select('case_id').ilike('note', `%${search}%`).limit(50);
+        const noteCaseIds = [...new Set((noteMatches || []).map(n => n.case_id))];
+        const orParts = [
+          `case_number.ilike.%${search}%`,
+          `account_number.ilike.%${search}%`,
+          `customer_name.ilike.%${search}%`,
+        ];
+        if (noteCaseIds.length) orParts.push(`id.in.(${noteCaseIds.join(',')})`);
+        query = query.or(orParts.join(','));
+      }
 
       const { data, error } = await query;
       const tbody = document.querySelector('#cases-table tbody');

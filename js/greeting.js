@@ -20,7 +20,7 @@ async function countClosed(supabase, from, to, agentId) {
   let query = supabase.from('cases').select('id', { count: 'exact', head: true })
     .gte('closed_at', from.toISOString())
     .lt('closed_at', to.toISOString());
-  if (agentId) query = query.eq('assigned_to', agentId);
+  if (agentId) query = query.eq('closed_by', agentId);
   const { count } = await query;
   return count || 0;
 }
