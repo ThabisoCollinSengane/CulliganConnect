@@ -13,6 +13,26 @@
   --shadow: 0 2px 10px rgba(0, 34, 102, 0.08);
 }
 
+/* Dark mode: the palette is used semantically (--white = surfaces,
+   --dark-blue = text, --light-blue = page background), so remapping the
+   variables restyles nearly everything. Toggled by js/theme.js. */
+:root[data-theme="dark"] {
+  --primary-blue: #4D82E0;
+  --light-blue: #101A2E;
+  --accent-blue: #5C9DFF;
+  --dark-blue: #E3EAF7;
+  --white: #182842;
+  --border: #2A3B5C;
+  --text-muted: #93A5C7;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme="dark"] .badge.green { background: rgba(46, 125, 50, 0.25); color: #7BD186; }
+:root[data-theme="dark"] .badge.orange { background: rgba(245, 124, 0, 0.22); color: #FFB866; }
+:root[data-theme="dark"] .badge.red { background: rgba(211, 47, 47, 0.25); color: #FF8A80; }
+:root[data-theme="dark"] .badge.grey { background: rgba(147, 165, 199, 0.18); color: var(--text-muted); }
+:root[data-theme="dark"] .app-header .brand .drop { background: var(--dark-blue); }
+
 * {
   box-sizing: border-box;
 }
