@@ -13,6 +13,7 @@
       <a href="/agent/index.html">My Day</a>
       <a href="/agent/cases.html">Cases</a>
       <a href="/agent/templates.html" class="active">Templates</a>
+      <a href="/agent/settings.html">Settings</a>
       <a href="#" id="logout-link">Sign out</a>
     </nav>
   </header>
@@ -22,16 +23,77 @@
       <a href="/agent/index.html">My Day</a>
       <a href="/agent/cases.html">All Cases</a>
       <a href="/agent/templates.html" class="active">Templates</a>
+      <a href="/agent/settings.html">Settings</a>
     </aside>
 
     <main class="main">
       <div class="card">
-        <h2 style="margin:0 0 4px;">Email templates</h2>
-        <p class="hint">Canned responses your admin has set up. Copy one and paste it into Outlook/Teams.</p>
+        <h2 style="margin:0 0 4px;">Team templates</h2>
+        <p class="hint">Default canned responses set up by your admin. Copy one and paste it into Outlook/Teams.</p>
+      </div>
+      <div id="shared-templates-list"></div>
+
+      <div class="card">
+        <div class="toolbar">
+          <div>
+            <h2 style="margin:0 0 4px;">My templates</h2>
+            <p class="hint">Your own personal snippets — only you can see these.</p>
+          </div>
+          <button class="btn" id="new-own-template-btn">+ Add my template</button>
+        </div>
+      </div>
+      <div id="own-templates-list"></div>
+
+      <div class="card">
+        <div class="toolbar">
+          <h2 style="margin:0;">📝 Notepad</h2>
+          <button class="btn" id="new-note-btn">+ New note</button>
+        </div>
+        <p class="hint">Quick personal notes — not tied to any case.</p>
+        <div id="quick-notes-list" style="margin-top:12px;"></div>
       </div>
 
-      <div id="templates-list"></div>
+      <div class="card">
+        <h2 style="margin:0 0 4px;">Reminders</h2>
+        <p class="hint">Personal reminders not tied to a specific case.</p>
+        <form id="reminder-form" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-top:12px;">
+          <div><label style="margin-top:0;">When</label><input type="datetime-local" id="reminder-at" required /></div>
+          <div style="flex:1; min-width:200px;"><label style="margin-top:0;">Note</label><input id="reminder-note" /></div>
+          <button class="btn" type="submit">Add reminder</button>
+        </form>
+        <div id="reminders-list" style="margin-top:16px;"></div>
+      </div>
     </main>
+  </div>
+
+  <div class="modal-backdrop hidden" id="template-modal-backdrop">
+    <div class="modal">
+      <h3>Add my template</h3>
+      <form id="own-template-form">
+        <div class="form-row"><label>Name</label><input id="ot-name" required /></div>
+        <div class="form-row"><label>Category</label><input id="ot-category" /></div>
+        <div class="form-row"><label>Subject</label><input id="ot-subject" required /></div>
+        <div class="form-row"><label>Body</label><textarea id="ot-body" rows="8" required></textarea></div>
+        <p class="error-text hidden" id="ot-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="ot-cancel">Cancel</button>
+          <button type="submit" class="btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="note-modal-backdrop">
+    <div class="modal">
+      <h3>New note</h3>
+      <form id="note-form">
+        <textarea id="qn-text" rows="8" placeholder="Write a note…" required style="font-family: ui-monospace, monospace;"></textarea>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="qn-cancel">Cancel</button>
+          <button type="submit" class="btn">Save</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <script type="module">
@@ -41,7 +103,7 @@
 
     const profile = await requireRole(['agent', 'admin']);
     if (profile) {
-      await loadTemplates();
+      await Promise.all([loadTemplates(), loadQuickNotes(), loadReminders()]);
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
@@ -49,9 +111,98 @@
       signOut();
     });
 
+    // ---- Templates ----
+    function renderTemplateCard(t, { editable }) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="toolbar">
+          <div>
+            <h3 style="margin:0;">${t.name}</h3>
+            <span class="hint">${t.category || 'Uncategorised'}</span>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn secondary copy-btn">Copy</button>
+            ${editable ? '<button class="btn secondary delete-btn">Delete</button>' : ''}
+          </div>
+        </div>
+        <p class="hint" style="font-weight:600;">${t.subject}</p>
+        <p style="white-space:pre-wrap;">${t.body}</p>
+        <p class="success-text hidden">Copied to clipboard.</p>
+      `;
+      card.querySelector('.copy-btn').addEventListener('click', async () => {
+        const ok = await copyToClipboard(`${t.subject}\n\n${t.body}`);
+        const successEl = card.querySelector('.success-text');
+        successEl.textContent = ok ? 'Copied to clipboard.' : 'Could not copy — copy manually.';
+        successEl.classList.remove('hidden');
+        setTimeout(() => successEl.classList.add('hidden'), 3000);
+      });
+      if (editable) {
+        card.querySelector('.delete-btn').addEventListener('click', async () => {
+          if (!confirm(`Delete "${t.name}"?`)) return;
+          await supabase.from('email_templates').delete().eq('id', t.id);
+          await loadTemplates();
+        });
+      }
+      return card;
+    }
+
     async function loadTemplates() {
       const { data, error } = await supabase.from('email_templates').select('*').order('category').order('name');
-      const list = document.getElementById('templates-list');
+      const sharedList = document.getElementById('shared-templates-list');
+      const ownList = document.getElementById('own-templates-list');
+      sharedList.innerHTML = '';
+      ownList.innerHTML = '';
+
+      if (error) {
+        sharedList.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+
+      const shared = (data || []).filter(t => t.is_shared);
+      const own = (data || []).filter(t => !t.is_shared && t.created_by === profile.id);
+
+      sharedList.innerHTML = shared.length ? '' : '<div class="card"><p class="hint">No team templates yet.</p></div>';
+      shared.forEach(t => sharedList.appendChild(renderTemplateCard(t, { editable: false })));
+
+      ownList.innerHTML = own.length ? '' : '<div class="card"><p class="hint">You haven\'t added any personal templates yet.</p></div>';
+      own.forEach(t => ownList.appendChild(renderTemplateCard(t, { editable: true })));
+    }
+
+    const templateModal = document.getElementById('template-modal-backdrop');
+    document.getElementById('new-own-template-btn').addEventListener('click', () => {
+      document.getElementById('ot-error').classList.add('hidden');
+      document.getElementById('own-template-form').reset();
+      templateModal.classList.remove('hidden');
+    });
+    document.getElementById('ot-cancel').addEventListener('click', () => templateModal.classList.add('hidden'));
+
+    document.getElementById('own-template-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('ot-error');
+      errorEl.classList.add('hidden');
+
+      const { error } = await supabase.from('email_templates').insert({
+        name: document.getElementById('ot-name').value.trim(),
+        category: document.getElementById('ot-category').value.trim() || null,
+        subject: document.getElementById('ot-subject').value.trim(),
+        body: document.getElementById('ot-body').value,
+        created_by: profile.id,
+      });
+
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      templateModal.classList.add('hidden');
+      await loadTemplates();
+    });
+
+    // ---- Quick notes (notepad) ----
+    async function loadQuickNotes() {
+      const { data, error } = await supabase.from('quick_notes').select('*').order('updated_at', { ascending: false });
+      const list = document.getElementById('quick-notes-list');
       list.innerHTML = '';
 
       if (error) {
@@ -59,35 +210,103 @@
         return;
       }
       if (!data || data.length === 0) {
-        list.innerHTML = '<div class="card"><p class="hint">No templates yet — ask your admin to add some.</p></div>';
+        list.innerHTML = '<p class="hint">Nothing jotted down yet.</p>';
         return;
       }
 
-      for (const t of data) {
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.innerHTML = `
-          <div class="toolbar">
-            <div>
-              <h3 style="margin:0;">${t.name}</h3>
-              <span class="hint">${t.category || 'Uncategorised'}</span>
-            </div>
-            <button class="btn secondary copy-btn">Copy</button>
+      for (const n of data) {
+        const div = document.createElement('div');
+        div.style.cssText = 'background: var(--light-blue); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;';
+        div.innerHTML = `
+          <div style="display:flex; justify-content:space-between; gap:10px;">
+            <span class="hint">${new Date(n.updated_at).toLocaleString()}</span>
+            <button class="btn secondary delete-note-btn" style="padding:2px 10px;">Delete</button>
           </div>
-          <p class="hint" style="font-weight:600;">${t.subject}</p>
-          <p style="white-space:pre-wrap;">${t.body}</p>
-          <p class="success-text hidden">Copied to clipboard.</p>
+          <p style="white-space:pre-wrap; font-family: ui-monospace, monospace; margin: 6px 0 0;">${n.note}</p>
         `;
-        card.querySelector('.copy-btn').addEventListener('click', async () => {
-          const ok = await copyToClipboard(`${t.subject}\n\n${t.body}`);
-          const successEl = card.querySelector('.success-text');
-          successEl.textContent = ok ? 'Copied to clipboard.' : 'Could not copy — copy manually.';
-          successEl.classList.remove('hidden');
-          setTimeout(() => successEl.classList.add('hidden'), 3000);
+        div.querySelector('.delete-note-btn').addEventListener('click', async () => {
+          await supabase.from('quick_notes').delete().eq('id', n.id);
+          await loadQuickNotes();
         });
-        list.appendChild(card);
+        list.appendChild(div);
       }
     }
+
+    const noteModal = document.getElementById('note-modal-backdrop');
+    document.getElementById('new-note-btn').addEventListener('click', () => {
+      document.getElementById('note-form').reset();
+      noteModal.classList.remove('hidden');
+    });
+    document.getElementById('qn-cancel').addEventListener('click', () => noteModal.classList.add('hidden'));
+
+    document.getElementById('note-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await supabase.from('quick_notes').insert({
+        user_id: profile.id,
+        note: document.getElementById('qn-text').value,
+      });
+      noteModal.classList.add('hidden');
+      await loadQuickNotes();
+    });
+
+    // ---- Standalone reminders ----
+    async function loadReminders() {
+      const { data, error } = await supabase
+        .from('reminders')
+        .select('id, reminder_at, note, is_dismissed')
+        .eq('user_id', profile.id)
+        .is('case_id', null)
+        .order('reminder_at', { ascending: true });
+
+      const list = document.getElementById('reminders-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No reminders set.</p>';
+        return;
+      }
+
+      for (const r of data) {
+        const div = document.createElement('div');
+        div.style.cssText = 'padding:8px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:10px;';
+        div.innerHTML = `
+          <span>${r.is_dismissed ? '<s>' : ''}${new Date(r.reminder_at).toLocaleString()} — ${r.note || ''}${r.is_dismissed ? '</s>' : ''}</span>
+          <button class="btn secondary dismiss-btn" data-id="${r.id}" ${r.is_dismissed ? 'disabled' : ''}>${r.is_dismissed ? 'Done' : 'Dismiss'}</button>
+        `;
+        list.appendChild(div);
+      }
+
+      list.querySelectorAll('.dismiss-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await supabase.from('reminders').update({ is_dismissed: true }).eq('id', btn.dataset.id);
+          await loadReminders();
+        });
+      });
+    }
+
+    document.getElementById('reminder-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const reminderAt = document.getElementById('reminder-at').value;
+      const note = document.getElementById('reminder-note').value.trim();
+
+      const { error } = await supabase.from('reminders').insert({
+        case_id: null,
+        user_id: profile.id,
+        reminder_at: new Date(reminderAt).toISOString(),
+        note,
+      });
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+      document.getElementById('reminder-form').reset();
+      await loadReminders();
+    });
   </script>
 </body>
 </html>
