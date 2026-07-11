@@ -71,7 +71,7 @@
           <h3 style="margin:0;">Results</h3>
           <div style="display:flex; gap:10px;">
             <button class="btn secondary" id="export-csv-btn">Export CSV</button>
-            <button class="btn secondary" id="print-pdf-btn">Print / Save as PDF</button>
+            <button class="btn secondary" id="print-pdf-btn">Download PDF</button>
             <button class="btn" id="generate-email-btn">Generate email</button>
           </div>
         </div>
@@ -248,9 +248,54 @@
       URL.revokeObjectURL(url);
     });
 
-    document.getElementById('print-pdf-btn').addEventListener('click', () => {
-      window.print();
-    });
+    // A real .pdf download built client-side — window.print() depended on the
+    // browser's print dialog, which on mobile often neither downloads a file
+    // nor formats the table correctly.
+    document.getElementById('print-pdf-btn').addEventListener('click', downloadPdf);
+
+    async function downloadPdf() {
+      if (!lastResults) return;
+      const btn = document.getElementById('print-pdf-btn');
+      btn.disabled = true;
+      btn.textContent = 'Preparing…';
+
+      try {
+        const [{ jsPDF }, { default: autoTable }] = await Promise.all([
+          import('https://esm.sh/jspdf@2.5.2'),
+          import('https://esm.sh/jspdf-autotable@3.8.4'),
+        ]);
+
+        const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+        doc.setFontSize(16);
+        doc.setTextColor(0, 51, 160);
+        doc.text('Culligan Performance Report', 40, 40);
+        doc.setFontSize(10);
+        doc.setTextColor(91, 107, 140);
+        doc.text(`${lastDeptLabel} · ${lastRangeLabel} · generated ${new Date().toLocaleString()}`, 40, 58);
+
+        const sum = (key) => lastResults.reduce((s, r) => s + r[key], 0);
+        autoTable(doc, {
+          startY: 75,
+          head: [['#', 'Agent', 'Department', 'Closed', 'Interacted', 'Calls taken', 'Escalated', 'SLA breaches', 'Weighted']],
+          body: lastResults.map((r, i) => [
+            i + 1, r.agent.full_name, r.agent.departments?.name || '—',
+            r.closed, r.interacted, r.callsTaken, r.escalated, r.slaBreaches, r.weighted,
+          ]),
+          foot: [['', 'Total', '', sum('closed'), sum('interacted'), sum('callsTaken'), sum('escalated'), sum('slaBreaches'), sum('weighted')]],
+          styles: { fontSize: 9, cellPadding: 5 },
+          headStyles: { fillColor: [0, 51, 160], textColor: 255 },
+          footStyles: { fillColor: [232, 240, 254], textColor: [0, 34, 102], fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [245, 248, 254] },
+        });
+
+        doc.save(`culligan-performance-${new Date().toISOString().slice(0, 10)}.pdf`);
+      } catch (err) {
+        alert(`Could not generate the PDF: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Download PDF';
+      }
+    }
 
     document.getElementById('generate-email-btn').addEventListener('click', () => {
       if (!lastResults || lastResults.length === 0) return;

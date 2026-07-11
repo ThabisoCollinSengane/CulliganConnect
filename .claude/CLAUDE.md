@@ -981,3 +981,24 @@ view (admin: agents→users, departments/service centres→setup, open cases→c
 closed/interacted→settings stats, escalated/open→cases list). `agent/cases.html` accepts
 `?status=…&mine=…` URL params to preset its filters for these deep links. New `a.stat-link`
 hover style in styles.css.
+
+---
+
+📄 v13 Update – Awaiting-status split + real PDF download (2026-07-11)
+
+· **Status split** (`20260711180000_split_awaiting_status.sql`): `awaiting_response` replaced by
+  `awaiting_internal` (waiting on a depot/another team) and `awaiting_customer` (waiting on the
+  customer) in the `cases_status_check` constraint — the user asked for this split after it was
+  offered in v12. Prod had zero `awaiting_response` rows at migration time; the migration still
+  remaps any to `awaiting_customer` defensively for other environments. Frontend: status selects
+  on agent/admin case pages + list filters updated; `caseHelpers.js` keeps an `awaiting_response`
+  label/badge entry marked *legacy* so old `case_status_history` rows still render nicely.
+· **PDF export is now a real download** (`admin/reports.html`): the "Print / Save as PDF" button
+  relied on `window.print()`, which on mobile neither downloaded a file nor formatted the table
+  (user-reported). Replaced with client-side jsPDF + jspdf-autotable (dynamically imported from
+  esm.sh — same CDN already serving supabase-js, loaded only on click), producing a landscape A4
+  `culligan-performance-<date>.pdf` with title/meta line, branded header row, striped rows and a
+  totals footer. The `@media print` stylesheet stays for Ctrl+P users, now with a force-light
+  variable override so dark mode never prints dark backgrounds. Note: this sandbox's proxy can't
+  reach esm.sh, so the import was not curl-verified here — it uses the exact CDN the deployed
+  site already depends on.
