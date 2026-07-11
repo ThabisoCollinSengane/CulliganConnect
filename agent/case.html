@@ -103,6 +103,7 @@
         <h3>Notes</h3>
         <form id="note-form">
           <textarea id="note-text" rows="3" placeholder="Add a note…" required></textarea>
+          <p class="hint" id="draft-status" style="margin-top:4px;">Tip: Ctrl/Cmd+Enter to save. Drafts auto-save locally every 30s.</p>
           <div style="display:flex; gap:16px; align-items:center; margin-top:10px; flex-wrap:wrap;">
             <label style="margin:0; display:flex; align-items:center; gap:6px;">
               <input type="radio" name="note-type" value="internal" checked style="width:auto;" /> Internal
@@ -140,6 +141,7 @@
     import { supabase } from '/js/supabaseClient.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { statusBadge, escalationCountdown, fillTemplate, copyToClipboard } from '/js/caseHelpers.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['agent', 'admin']);
     const caseId = new URLSearchParams(window.location.search).get('id');
@@ -150,11 +152,49 @@
     if (!caseId) {
       document.getElementById('case-title').textContent = 'No case specified.';
     } else if (profile) {
+      subscribeToNotifications(profile.id);
       await loadLookups();
       await loadCase();
       await loadNotes();
       await loadReminders();
       await loadHistory();
+      initNoteDraft();
+    }
+
+    // ---- Note draft autosave (localStorage, not the database — a draft isn't a saved note) ----
+    const draftKey = `culligan-draft-note-${caseId}`;
+
+    function initNoteDraft() {
+      const textarea = document.getElementById('note-text');
+      const status = document.getElementById('draft-status');
+      const saved = localStorage.getItem(draftKey);
+      if (saved) {
+        textarea.value = saved;
+        status.textContent = 'Draft restored from your last visit. Ctrl/Cmd+Enter to save.';
+      }
+
+      let lastSaved = textarea.value;
+      setInterval(() => {
+        if (textarea.value && textarea.value !== lastSaved) {
+          localStorage.setItem(draftKey, textarea.value);
+          lastSaved = textarea.value;
+          status.textContent = `Draft auto-saved locally at ${new Date().toLocaleTimeString()}.`;
+        }
+      }, 30000);
+
+      textarea.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+          e.preventDefault();
+          document.getElementById('note-form').requestSubmit();
+        }
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          document.getElementById('note-form').requestSubmit();
+        }
+      });
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
@@ -384,6 +424,8 @@
       }
 
       document.getElementById('note-form').reset();
+      localStorage.removeItem(draftKey);
+      document.getElementById('draft-status').textContent = 'Tip: Ctrl/Cmd+Enter to save. Drafts auto-save locally every 30s.';
       await loadNotes();
       await loadCase();
     });

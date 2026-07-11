@@ -32,6 +32,7 @@
           <h2 style="margin:0;">My Cases</h2>
           <button class="btn" id="new-case-btn">+ New case</button>
         </div>
+        <p class="hint" style="margin-top:-8px;">Tip: press <kbd>n</kbd> for a new case, <kbd>/</kbd> to search.</p>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
           <input id="search-input" placeholder="Search case #, account #, or customer name…" style="flex:2; min-width:220px;" />
           <select id="status-filter" style="flex:1; min-width:160px;">
@@ -93,11 +94,13 @@
     import { supabase } from '/js/supabaseClient.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['agent', 'admin']);
     let caseTypes = [];
 
     if (profile) {
+      subscribeToNotifications(profile.id);
       await loadCaseTypes();
       await loadCases();
     }
@@ -110,6 +113,20 @@
     document.getElementById('search-input').addEventListener('input', debounce(loadCases, 300));
     document.getElementById('status-filter').addEventListener('change', loadCases);
     document.getElementById('type-filter').addEventListener('change', loadCases);
+
+    document.addEventListener('keydown', (e) => {
+      const tag = document.activeElement?.tagName;
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+      if (typing) return;
+
+      if (e.key === 'n') {
+        e.preventDefault();
+        document.getElementById('modal-backdrop').classList.remove('hidden');
+      } else if (e.key === '/') {
+        e.preventDefault();
+        document.getElementById('search-input').focus();
+      }
+    });
 
     function debounce(fn, ms) {
       let t;

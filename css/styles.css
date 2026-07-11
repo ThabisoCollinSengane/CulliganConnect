@@ -269,6 +269,17 @@ label {
   margin: 4px 0 0;
 }
 
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--white);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8em;
+}
+
 /* Login page */
 .login-wrap {
   min-height: 100vh;
@@ -362,6 +373,27 @@ label {
 
 .hidden {
   display: none !important;
+}
+
+.print-only {
+  display: none;
+}
+
+@media print {
+  .app-header, .sidebar, .modal-backdrop, .no-print, form, .btn, .toolbar > .btn, button {
+    display: none !important;
+  }
+  .layout, .main {
+    display: block !important;
+    padding: 0 !important;
+  }
+  .card {
+    box-shadow: none !important;
+    border: 1px solid #ccc;
+  }
+  .print-only {
+    display: block !important;
+  }
 }
 
 @media (max-width: 720px) {

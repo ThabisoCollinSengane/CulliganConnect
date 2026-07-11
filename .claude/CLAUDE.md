@@ -775,3 +775,44 @@ simulated JWT) exercising insert on all four changed/new tables, confirming the 
 actually overrides a client that lies about `is_shared`, and confirming a team-wide target
 created by the real admin account is visible to a different, unrelated agent session. Cleaned up
 afterward.
+
+---
+
+🔔 v8 Update – Push notifications, draft autosave, keyboard shortcuts, PDF export (2026-07-11)
+
+Picked up the recommendations from the v7 summary plus the remaining original-spec items:
+
+· **Browser push notifications**: enabled Supabase Realtime on `notifications`
+  (`alter publication supabase_realtime add table notifications;` — no table had Realtime on
+  before this). `js/notifications.js` requests `Notification` permission and subscribes to
+  `postgres_changes` INSERTs scoped to the signed-in user; every agent/admin page calls
+  `subscribeToNotifications(profile.id)` right after `requireRole()` succeeds (12 pages,
+  mechanically the same call except `agent/index.html`, which also passes a callback to refresh
+  its visible notification list). **Known limitation, not a bug**: this is a multi-page app with
+  full navigations, not a SPA — the subscription only lives as long as the current page does.
+  There's no cross-page/tab persistence; navigating away and back re-subscribes fresh. If that
+  ever becomes a real problem, the fix is a service worker, which is a materially bigger lift.
+· **Note draft autosave** (`agent/case.html`): the note textarea's content is mirrored to
+  `localStorage` (key `culligan-draft-note-<caseId>`) every 30s if changed, restored on page
+  load, and cleared on successful submit. Deliberately **not** written to `case_notes` as a
+  periodic DB write — a draft isn't a saved note, and case_notes has no concept of an unsaved/
+  draft state. If multi-device draft sync is ever wanted, that's a schema change (a `note_drafts`
+  table), not a tweak to this.
+· **Keyboard shortcuts**: `agent/case.html` — Ctrl/Cmd+Enter in the note textarea or Ctrl/Cmd+S
+  anywhere on the page submits the note form (matches the original spec's example). `agent/
+  cases.html` — `n` opens the New Case modal, `/` focuses search, both guarded to not fire while
+  focus is already in an input/textarea/select.
+· **PDF export**: `admin/reports.html` gets a "Print / Save as PDF" button (`window.print()`)
+  backed by a global `@media print` block in `styles.css` (hides header/sidebar/buttons/forms,
+  shows a `.print-only` report caption with the date range and generation timestamp). No PDF
+  library — every browser's print-to-PDF is the export path. This pattern (`.print-only` class +
+  the print media query) is reusable for any future page that wants a PDF export without adding
+  a client-side PDF dependency.
+
+Not pursued, and still won't be without being asked again:
+· **Leaked password protection** (HaveIBeenPwned check) — confirmed again there is still no
+  Supabase MCP tool that reaches Auth service config (checked `search_docs`/tool list this
+  round); it's dashboard-only (Authentication → Policies).
+· **`multiple_permissive_policies`** advisor findings from v6 — still deliberately left alone,
+  same reasoning as before (correct behavior, not a real bottleneck at this scale, real
+  refactor risk for marginal gain).
