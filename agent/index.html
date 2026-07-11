@@ -89,9 +89,11 @@
     import { requireRole, signOut } from '/js/auth.js';
     import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
     import { timeGreeting, motivationalLine } from '/js/greeting.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['agent', 'admin']);
     if (profile) {
+      subscribeToNotifications(profile.id, () => loadNotifications());
       document.getElementById('welcome-msg').textContent = timeGreeting(profile.full_name || profile.email);
       motivationalLine(supabase, profile.id).then(line => {
         document.getElementById('welcome-motivation').textContent = line;

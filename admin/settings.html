@@ -113,9 +113,11 @@
   <script type="module">
     import { supabase } from '/js/supabaseClient.js';
     import { requireRole, signOut } from '/js/auth.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['admin']);
     if (profile) {
+      subscribeToNotifications(profile.id);
       await Promise.all([
         loadSimpleTable('departments', ['name', 'description']),
         loadSimpleTable('case_types', ['name']),

@@ -71,9 +71,11 @@
           <h3 style="margin:0;">Results</h3>
           <div style="display:flex; gap:10px;">
             <button class="btn secondary" id="export-csv-btn">Export CSV</button>
+            <button class="btn secondary" id="print-pdf-btn">Print / Save as PDF</button>
             <button class="btn" id="generate-email-btn">Generate email</button>
           </div>
         </div>
+        <p class="hint print-only" id="print-heading"></p>
         <table id="ranking-table">
           <thead><tr><th>#</th><th>Agent</th><th>Department</th><th>Closed</th><th>Interacted</th><th>Calls taken</th><th>Escalated</th><th>SLA breaches</th><th>Weighted</th></tr></thead>
           <tbody></tbody>
@@ -95,6 +97,7 @@
     import { supabase } from '/js/supabaseClient.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { copyToClipboard } from '/js/caseHelpers.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['admin']);
     let lastResults = null;
@@ -102,6 +105,7 @@
     let lastDeptLabel = 'All departments';
 
     if (profile) {
+      subscribeToNotifications(profile.id);
       await loadDepartments();
     }
 
@@ -197,6 +201,8 @@
 
       lastResults = rows;
       renderTable(rows);
+      document.getElementById('print-heading').textContent =
+        `Culligan Performance Report — ${lastDeptLabel} — ${lastRangeLabel} — generated ${new Date().toLocaleString()}`;
       document.getElementById('results-card').classList.remove('hidden');
       document.getElementById('email-card').classList.add('hidden');
     }
@@ -239,6 +245,10 @@
       a.download = `culligan-performance-${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('print-pdf-btn').addEventListener('click', () => {
+      window.print();
     });
 
     document.getElementById('generate-email-btn').addEventListener('click', () => {
