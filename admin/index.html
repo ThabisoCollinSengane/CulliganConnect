@@ -46,6 +46,18 @@
         <div class="stat-tile"><div class="value" id="stat-cases-open">–</div><div class="label">Open cases</div></div>
       </div>
 
+      <a href="/admin/cases.html" style="text-decoration:none;">
+        <div class="card" id="escalation-risk-card" style="border-left: 4px solid var(--red);">
+          <div class="toolbar">
+            <div>
+              <h3 style="margin:0;">🚨 Escalations overdue</h3>
+              <p class="hint" style="margin:2px 0 0;">Past their SLA timer right now. Assigned agents and admins are notified automatically when this happens.</p>
+            </div>
+            <div class="value" id="stat-overdue" style="font-size:2.2rem; color:var(--red);">–</div>
+          </div>
+        </div>
+      </a>
+
       <div class="card">
         <h3>Agents by department</h3>
         <table id="dept-table">
@@ -78,17 +90,20 @@
     });
 
     async function loadStats() {
-      const [{ count: agentCount }, { data: departments }, { count: centreCount }, { count: openCases }] = await Promise.all([
+      const [{ count: agentCount }, { data: departments }, { count: centreCount }, { count: openCases }, { count: overdueCount }] = await Promise.all([
         supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'agent').eq('is_active', true),
         supabase.from('departments').select('id, name').eq('is_active', true).order('name'),
         supabase.from('service_centres').select('id', { count: 'exact', head: true }).eq('is_active', true),
         supabase.from('cases').select('id', { count: 'exact', head: true }).not('status', 'in', '("closed","resolved")'),
+        supabase.from('cases').select('id', { count: 'exact', head: true }).eq('status', 'escalated').lt('escalation_expires_at', new Date().toISOString()),
       ]);
 
       document.getElementById('stat-agents').textContent = agentCount ?? 0;
       document.getElementById('stat-departments').textContent = (departments || []).length;
       document.getElementById('stat-service-centres').textContent = centreCount ?? 0;
       document.getElementById('stat-cases-open').textContent = openCases ?? 0;
+      document.getElementById('stat-overdue').textContent = overdueCount ?? 0;
+      document.getElementById('escalation-risk-card').style.background = overdueCount ? '#FCEBEB' : '';
 
       const tbody = document.querySelector('#dept-table tbody');
       tbody.innerHTML = '';
