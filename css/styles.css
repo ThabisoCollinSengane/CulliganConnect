@@ -158,6 +158,24 @@ a {
   padding: 18px 20px;
 }
 
+/* Clickable stat tiles that link to their full view. */
+a.stat-link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+a.stat-link .stat-tile {
+  height: 100%;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+a.stat-link:hover .stat-tile {
+  box-shadow: 0 4px 16px rgba(0, 34, 102, 0.18);
+  transform: translateY(-1px);
+  outline: 1px solid var(--accent-blue);
+}
+
 .stat-tile .value {
   font-size: 1.9rem;
   font-weight: 700;

@@ -975,3 +975,9 @@ exist) — recorded here so future decisions line up with them. If "awaiting int
 "awaiting customer feedback" ever need to be *separate* statuses (today a single
 `awaiting_response` covers both), that's a check-constraint change on `cases.status` plus badge/
 filter updates — offered to the user, not yet requested.
+
+Addendum (same day): **clickable stat tiles** — every dashboard stat tile now links to its full
+view (admin: agents→users, departments/service centres→setup, open cases→cases; agent:
+closed/interacted→settings stats, escalated/open→cases list). `agent/cases.html` accepts
+`?status=…&mine=…` URL params to preset its filters for these deep links. New `a.stat-link`
+hover style in styles.css.
