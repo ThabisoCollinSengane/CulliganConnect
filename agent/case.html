@@ -90,14 +90,28 @@
       </div>
 
       <div class="card hidden" id="template-card">
-        <h3>Escalation email templates</h3>
-        <div class="form-row">
-          <label style="margin-top:0;">Depot's update (paste here before copying the customer email)</label>
-          <textarea id="depot-update" rows="3"></textarea>
-        </div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button class="btn secondary" id="copy-depot-btn">Copy depot email</button>
-          <button class="btn secondary" id="copy-customer-btn">Copy customer email</button>
+        <h3 style="margin-bottom:4px;">Escalation flow — use these exact templates</h3>
+        <p class="hint" style="margin:0 0 14px;">One professional standard for the whole team: <strong>1)</strong> send the escalation to the service centre, <strong>2)</strong> when their update comes back, paste it in and send the customer their feedback.</p>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px;">
+          <div style="border:1px solid var(--border); border-radius:8px; padding:14px;">
+            <div class="toolbar" style="margin-bottom:8px;">
+              <h4 style="margin:0;">📤 Step 1 — Send to service centre</h4>
+              <button class="btn" id="copy-depot-btn">Copy email</button>
+            </div>
+            <p class="hint" id="depot-recipients" style="margin:0 0 8px;"></p>
+            <p style="font-weight:600; margin:0 0 6px;" id="depot-subject-preview"></p>
+            <div id="depot-body-preview" style="white-space:pre-wrap; font-size:0.85rem; background:var(--light-blue); border-radius:6px; padding:10px 12px; max-height:240px; overflow-y:auto;"></div>
+          </div>
+          <div style="border:1px solid var(--border); border-radius:8px; padding:14px;">
+            <div class="toolbar" style="margin-bottom:8px;">
+              <h4 style="margin:0;">💬 Step 2 — Feedback for customer</h4>
+              <button class="btn" id="copy-customer-btn">Copy email</button>
+            </div>
+            <label style="margin-top:0;">Service centre's update (fills the customer email below)</label>
+            <textarea id="depot-update" rows="2" placeholder="e.g. Delivery rescheduled for tomorrow before 12pm"></textarea>
+            <p style="font-weight:600; margin:10px 0 6px;" id="customer-subject-preview"></p>
+            <div id="customer-body-preview" style="white-space:pre-wrap; font-size:0.85rem; background:var(--light-blue); border-radius:6px; padding:10px 12px; max-height:240px; overflow-y:auto;"></div>
+          </div>
         </div>
         <p class="success-text hidden" id="copy-success"></p>
       </div>
@@ -385,7 +399,30 @@
 
       escalationTemplate = data;
       templateCard.classList.remove('hidden');
+      renderTemplatePreviews();
     }
+
+    // Both templates render side by side, always from the same source — one
+    // professional standard, no freestyling. Step 2 re-renders as the update is typed.
+    function renderTemplatePreviews() {
+      if (!escalationTemplate) return;
+      const update = document.getElementById('depot-update').value.trim();
+      const centre = currentCase.service_centres;
+
+      document.getElementById('depot-recipients').textContent = centre
+        ? `To: ${centre.depot_email}${centre.cc_contacts ? ` · Cc: ${centre.cc_contacts}` : ''}`
+        : '⚠ No service centre selected — pick one above and save first.';
+      document.getElementById('depot-subject-preview').textContent =
+        fillTemplate(escalationTemplate.depot_subject, tokenValues());
+      document.getElementById('depot-body-preview').textContent =
+        fillTemplate(escalationTemplate.depot_body, tokenValues());
+      document.getElementById('customer-subject-preview').textContent =
+        fillTemplate(escalationTemplate.customer_subject, tokenValues(update));
+      document.getElementById('customer-body-preview').textContent =
+        fillTemplate(escalationTemplate.customer_body, tokenValues(update));
+    }
+
+    document.getElementById('depot-update').addEventListener('input', renderTemplatePreviews);
 
     function tokenValues(update) {
       const sla = currentCase.sla_date

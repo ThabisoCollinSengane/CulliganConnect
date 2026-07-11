@@ -34,6 +34,12 @@
       <div id="shared-templates-list"></div>
 
       <div class="card">
+        <h2 style="margin:0 0 4px;">🚨 Escalation templates</h2>
+        <p class="hint">One per escalation reason: the <strong>service centre</strong> email and the <strong>customer feedback</strong> reply, side by side — the exact flow you follow from a case. Tokens like {ACCOUNT} and {UPDATE} fill in automatically on the case page, so use them from there.</p>
+        <div id="escalation-templates-list" style="margin-top:12px;"></div>
+      </div>
+
+      <div class="card">
         <div class="toolbar">
           <div>
             <h2 style="margin:0 0 4px;">My templates</h2>
@@ -133,7 +139,48 @@
     const profile = await requireRole(['agent', 'admin']);
     if (profile) {
       subscribeToNotifications(profile.id);
-      await Promise.all([loadTemplates(), loadQuickNotes(), loadReminders()]);
+      await Promise.all([loadTemplates(), loadEscalationTemplates(), loadQuickNotes(), loadReminders()]);
+    }
+
+    // ---- Escalation templates (read-only reference; used live from the case page) ----
+    async function loadEscalationTemplates() {
+      const { data, error } = await supabase
+        .from('escalation_templates')
+        .select('id, depot_subject, depot_body, customer_subject, customer_body, escalation_reasons(name)')
+        .order('id');
+
+      const list = document.getElementById('escalation-templates-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No escalation templates set up yet — ask your admin.</p>';
+        return;
+      }
+
+      for (const t of data) {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'margin-bottom:18px;';
+        wrap.innerHTML = `
+          <h3 style="margin:0 0 8px;">${t.escalation_reasons?.name || 'Escalation'}</h3>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px;">
+            <div style="border:1px solid var(--border); border-radius:8px; padding:12px;">
+              <p class="hint" style="margin:0 0 6px; font-weight:600;">📤 Step 1 — Send to service centre</p>
+              <p style="font-weight:600; margin:0 0 6px; font-size:0.88rem;">${t.depot_subject || ''}</p>
+              <div style="white-space:pre-wrap; font-size:0.82rem; background:var(--light-blue); border-radius:6px; padding:8px 10px; max-height:180px; overflow-y:auto;">${t.depot_body || ''}</div>
+            </div>
+            <div style="border:1px solid var(--border); border-radius:8px; padding:12px;">
+              <p class="hint" style="margin:0 0 6px; font-weight:600;">💬 Step 2 — Feedback for customer</p>
+              <p style="font-weight:600; margin:0 0 6px; font-size:0.88rem;">${t.customer_subject || ''}</p>
+              <div style="white-space:pre-wrap; font-size:0.82rem; background:var(--light-blue); border-radius:6px; padding:8px 10px; max-height:180px; overflow-y:auto;">${t.customer_body || ''}</div>
+            </div>
+          </div>
+        `;
+        list.appendChild(wrap);
+      }
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {

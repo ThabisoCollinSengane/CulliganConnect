@@ -104,6 +104,11 @@
     const profile = await requireRole(['agent', 'admin']);
     let caseTypes = [];
 
+    // Dashboard stat tiles deep-link here with preset filters, e.g. ?status=escalated&mine=1.
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('status')) document.getElementById('status-filter').value = params.get('status');
+    if (params.get('mine') === '0' || params.get('mine') === 'all') document.getElementById('mine-filter').value = 'all';
+
     if (profile) {
       subscribeToNotifications(profile.id);
       await loadCaseTypes();

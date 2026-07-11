@@ -942,3 +942,42 @@ All eight items the user approved from the v10 suggestion list, in one batch:
   theme-agnostic where they'd clash (overdue card tint → rgba).
 
 Deliberately NOT built (not selected by user): pre-breach SLA warning notification.
+
+---
+
+🧭 v12 Update – Escalation flow: two templates side by side + mission statement (2026-07-11)
+
+**Mission (user's words, paraphrased — treat as the product's north star):**
+1. Admins (team leaders/management) and agents record *interacted cases*: closed, awaiting
+   internal or customer feedback, and escalated.
+2. The team tracks escalations and feeds back to customers accordingly.
+3. One universal record of customer interactions → stats, and data Culligan can use to see what
+   to improve for customers.
+4. Escalation templates must present the "send to service centre" email and the "feedback for
+   customer" email **next to each other**, so agents follow the same agentic flow — same
+   templates for everyone, one professional communication standard.
+
+**Built for #4:**
+· `agent/case.html`: the escalation template card is now a two-step, side-by-side flow —
+  "📤 Step 1 — Send to service centre" (To/Cc from the case's service centre + fully token-filled
+  subject/body preview) next to "💬 Step 2 — Feedback for customer" (the depot-update textarea
+  feeds `{UPDATE}` and the customer email preview re-renders live as the agent types). Both
+  panels show the *actual filled email*, not just a copy button, so agents see exactly what
+  goes out. Copy buttons per panel; grid collapses to one column on narrow screens
+  (`repeat(auto-fit, minmax(320px, 1fr))`).
+· `agent/templates.html`: new read-only "🚨 Escalation templates" section listing every reason's
+  depot/customer pair side by side (raw tokens visible), with a pointer that the live, auto-filled
+  versions are used from the case page. Read allowed by the existing
+  `authenticated_read_escalation_templates` policy — no schema change in this batch.
+
+Points 1–3 required no code change (statuses, escalation tracking, and stats/reports already
+exist) — recorded here so future decisions line up with them. If "awaiting internal feedback" vs
+"awaiting customer feedback" ever need to be *separate* statuses (today a single
+`awaiting_response` covers both), that's a check-constraint change on `cases.status` plus badge/
+filter updates — offered to the user, not yet requested.
+
+Addendum (same day): **clickable stat tiles** — every dashboard stat tile now links to its full
+view (admin: agents→users, departments/service centres→setup, open cases→cases; agent:
+closed/interacted→settings stats, escalated/open→cases list). `agent/cases.html` accepts
+`?status=…&mine=…` URL params to preset its filters for these deep links. New `a.stat-link`
+hover style in styles.css.
