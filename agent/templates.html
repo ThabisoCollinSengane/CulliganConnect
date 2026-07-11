@@ -29,7 +29,7 @@
     <main class="main">
       <div class="card">
         <h2 style="margin:0 0 4px;">Team templates</h2>
-        <p class="hint">Default canned responses set up by your admin. Copy one and paste it into Outlook/Teams.</p>
+        <p class="hint">Default canned responses set up by your admin. Hit <strong>Use</strong>, fill in the account number, task number or other details, and copy the generated email into Outlook/Teams.</p>
       </div>
       <div id="shared-templates-list"></div>
 
@@ -74,12 +74,28 @@
         <div class="form-row"><label>Category</label><input id="ot-category" /></div>
         <div class="form-row"><label>Subject</label><input id="ot-subject" required /></div>
         <div class="form-row"><label>Body</label><textarea id="ot-body" rows="8" required></textarea></div>
+        <p class="hint">Tip: write fill-in fields in square brackets — e.g. [ACCOUNT NUMBER], [TASK NUMBER], [DATE] — and the Use button will ask for them.</p>
         <p class="error-text hidden" id="ot-error"></p>
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="ot-cancel">Cancel</button>
           <button type="submit" class="btn">Save</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="use-modal-backdrop">
+    <div class="modal" style="max-width:640px;">
+      <h3 id="use-modal-title">Use template</h3>
+      <p class="hint">Fill in the details below — the email is generated as you type. Your name is filled in for you.</p>
+      <div id="use-fields"></div>
+      <label>Preview</label>
+      <div id="use-preview" style="background:var(--light-blue); border-radius:8px; padding:14px 16px; white-space:pre-wrap; font-size:0.9rem; max-height:280px; overflow-y:auto;"></div>
+      <p class="success-text hidden" id="use-copied">Copied to clipboard — paste it into Outlook/Teams.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="use-cancel">Close</button>
+        <button type="button" class="btn" id="use-copy">Copy email</button>
+      </div>
     </div>
   </div>
 
@@ -124,7 +140,8 @@
             <span class="hint">${t.category || 'Uncategorised'}</span>
           </div>
           <div style="display:flex; gap:8px;">
-            <button class="btn secondary copy-btn">Copy</button>
+            <button class="btn use-btn">Use</button>
+            <button class="btn secondary copy-btn">Copy raw</button>
             ${editable ? '<button class="btn secondary delete-btn">Delete</button>' : ''}
           </div>
         </div>
@@ -132,6 +149,7 @@
         <p style="white-space:pre-wrap;">${t.body}</p>
         <p class="success-text hidden">Copied to clipboard.</p>
       `;
+      card.querySelector('.use-btn').addEventListener('click', () => openUseModal(t));
       card.querySelector('.copy-btn').addEventListener('click', async () => {
         const ok = await copyToClipboard(`${t.subject}\n\n${t.body}`);
         const successEl = card.querySelector('.success-text');
@@ -148,6 +166,89 @@
       }
       return card;
     }
+
+    // ---- Use-template flow: detect [PLACEHOLDER] / {TOKEN} fields, fill, generate ----
+    const AUTO_FILL = {
+      'YOUR NAME': () => profile.full_name || '',
+      'NAME': () => profile.full_name || '',
+      'AGENT NAME': () => profile.full_name || '',
+      'TODAY': () => new Date().toLocaleDateString('en-GB'),
+      'DATE TODAY': () => new Date().toLocaleDateString('en-GB'),
+    };
+
+    function extractPlaceholders(text) {
+      const found = [];
+      for (const m of text.matchAll(/\[([^\[\]\n]{1,60})\]|\{(\w{1,40})\}/g)) {
+        const key = (m[1] || m[2]).trim();
+        if (key && !found.includes(key)) found.push(key);
+      }
+      return found;
+    }
+
+    function fillPlaceholders(text, values) {
+      return text.replace(/\[([^\[\]\n]{1,60})\]|\{(\w{1,40})\}/g, (match, bracketKey, tokenKey) => {
+        const key = (bracketKey || tokenKey).trim();
+        const v = values[key];
+        return v === undefined || v === '' ? match : v;
+      });
+    }
+
+    let useTemplate = null;
+    const useModal = document.getElementById('use-modal-backdrop');
+
+    function openUseModal(t) {
+      useTemplate = t;
+      document.getElementById('use-modal-title').textContent = `Use: ${t.name}`;
+      document.getElementById('use-copied').classList.add('hidden');
+
+      const full = `${t.subject}\n${t.body}`;
+      const placeholders = extractPlaceholders(full);
+      const fieldsEl = document.getElementById('use-fields');
+      fieldsEl.innerHTML = placeholders.length
+        ? ''
+        : '<p class="hint">This template has no fill-in fields — just copy it.</p>';
+
+      for (const key of placeholders) {
+        const wrap = document.createElement('div');
+        wrap.className = 'form-row';
+        const label = document.createElement('label');
+        label.textContent = key.charAt(0) + key.slice(1).toLowerCase();
+        const input = document.createElement('input');
+        input.dataset.placeholder = key;
+        input.value = AUTO_FILL[key.toUpperCase()]?.() ?? '';
+        wrap.append(label, input);
+        fieldsEl.appendChild(wrap);
+      }
+
+      fieldsEl.querySelectorAll('input').forEach(input => input.addEventListener('input', renderUsePreview));
+      renderUsePreview();
+      useModal.classList.remove('hidden');
+    }
+
+    function currentUseValues() {
+      const values = {};
+      document.querySelectorAll('#use-fields input').forEach(input => {
+        values[input.dataset.placeholder] = input.value.trim();
+      });
+      return values;
+    }
+
+    function generatedEmail() {
+      const values = currentUseValues();
+      return `${fillPlaceholders(useTemplate.subject, values)}\n\n${fillPlaceholders(useTemplate.body, values)}`;
+    }
+
+    function renderUsePreview() {
+      document.getElementById('use-preview').textContent = generatedEmail();
+    }
+
+    document.getElementById('use-cancel').addEventListener('click', () => useModal.classList.add('hidden'));
+    document.getElementById('use-copy').addEventListener('click', async () => {
+      const ok = await copyToClipboard(generatedEmail());
+      const el = document.getElementById('use-copied');
+      el.textContent = ok ? 'Copied to clipboard — paste it into Outlook/Teams.' : 'Could not copy — copy from the preview manually.';
+      el.classList.remove('hidden');
+    });
 
     async function loadTemplates() {
       const { data, error } = await supabase.from('email_templates').select('*').order('category').order('name');

@@ -29,12 +29,16 @@
     <main class="main">
       <div class="card">
         <div class="toolbar">
-          <h2 style="margin:0;">My Cases</h2>
+          <h2 style="margin:0;">Cases</h2>
           <button class="btn" id="new-case-btn">+ New case</button>
         </div>
-        <p class="hint" style="margin-top:-8px;">Tip: press <kbd>n</kbd> for a new case, <kbd>/</kbd> to search.</p>
+        <p class="hint" style="margin-top:-8px;">Tip: press <kbd>n</kbd> for a new case, <kbd>/</kbd> to search. Escalated cases can be actioned and closed by anyone on the team.</p>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
           <input id="search-input" placeholder="Search case #, account #, or customer name…" style="flex:2; min-width:220px;" />
+          <select id="mine-filter" style="flex:1; min-width:140px;">
+            <option value="mine" selected>My cases</option>
+            <option value="all">Whole team</option>
+          </select>
           <select id="status-filter" style="flex:1; min-width:160px;">
             <option value="">All statuses</option>
             <option value="new">New</option>
@@ -47,7 +51,7 @@
           <select id="type-filter" style="flex:1; min-width:160px;"></select>
         </div>
         <table id="cases-table">
-          <thead><tr><th>Case #</th><th>Account #</th><th>Customer</th><th>Type</th><th>Status</th><th>Escalation</th></tr></thead>
+          <thead><tr><th>Case #</th><th>Account #</th><th>Customer</th><th>Type</th><th>Status</th><th>Escalation</th><th>Assigned to</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -111,6 +115,7 @@
     });
 
     document.getElementById('search-input').addEventListener('input', debounce(loadCases, 300));
+    document.getElementById('mine-filter').addEventListener('change', loadCases);
     document.getElementById('status-filter').addEventListener('change', loadCases);
     document.getElementById('type-filter').addEventListener('change', loadCases);
 
@@ -149,11 +154,11 @@
 
       let query = supabase
         .from('cases')
-        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, case_types(name)')
-        .eq('assigned_to', profile.id)
+        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, case_types(name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
         .order('created_at', { ascending: false })
         .limit(100);
 
+      if (document.getElementById('mine-filter').value === 'mine') query = query.eq('assigned_to', profile.id);
       if (status) query = query.eq('status', status);
       if (typeId) query = query.eq('case_type_id', typeId);
       if (search) query = query.or(`case_number.ilike.%${search}%,account_number.ilike.%${search}%,customer_name.ilike.%${search}%`);
@@ -163,11 +168,11 @@
       tbody.innerHTML = '';
 
       if (error) {
-        tbody.innerHTML = `<tr><td colspan="6" class="error-text">${error.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="error-text">${error.message}</td></tr>`;
         return;
       }
       if (!data || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="hint">No cases found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="hint">No cases found.</td></tr>';
         return;
       }
 
@@ -185,6 +190,7 @@
           <td>${c.case_types?.name || '—'}</td>
           <td>${statusBadge(c.status)}</td>
           <td>${escalationCell}</td>
+          <td>${c.assigned_agent?.full_name || '—'}</td>
         `;
         tr.addEventListener('click', () => {
           window.location.href = `/agent/case.html?id=${c.id}`;

@@ -860,3 +860,41 @@ timers). This closes that gap.
 Notification types are now three: `eod_stats` (v7-ish daily digest), `case_mention` (v6,
 agent-to-agent tagging), `escalation_overdue` (this). All three ride the same `notifications`
 table, RLS, and Realtime/browser-push plumbing from v8 — no new infra needed to add this one.
+
+---
+
+🛠 v10 Update – Template fill flow, shared escalation queue, daily target meter (2026-07-11)
+
+Five user-reported fixes, two of which turned out to be real backend bugs found by testing:
+
+· **Template sharing was silently broken (root cause of "templates aren't reaching agents")**:
+  `enforce_email_template_sharing()` forced `is_shared := false` whenever `is_admin()` was false —
+  and `is_admin()` is false when `auth.uid()` is *null*, i.e. for the superuser context the seed
+  migration ran in. All five seeded team templates were therefore demoted to the admin's personal
+  templates; agents saw "No team templates yet" the whole time. Fixed the trigger to only force
+  personal when an actual signed-in non-admin writes (`auth.uid() is not null and not is_admin()`)
+  and repaired the data (`20260711160200_fix_template_sharing_and_placeholders.sql`).
+· **Template "Use" flow** (`agent/templates.html`): every template card (team + personal) gets a
+  "Use" button that scans subject+body for `[SQUARE BRACKET]` and `{TOKEN}` placeholders, renders
+  one input per unique placeholder (agent name/date auto-filled), live-previews the generated
+  email, and copies it. The five defaults were enriched with `[CUSTOMER NAME]`, `[ACCOUNT NUMBER]`
+  and `[TASK NUMBER]` fields. Admin templates page now documents the bracket convention.
+· **Closing escalated cases**: the status dropdown always allowed it, but RLS only let agents
+  update cases *assigned to them* — an escalated case assigned to someone else (the shared-queue
+  reality of the Excel tracker) failed silently: 0 rows updated, no error shown.
+  `20260711160000_team_case_visibility.sql` brings over the shared-sheet model: team-wide SELECT
+  on cases/notes/history, UPDATE on own-or-escalated cases, mentions/notes insertable by any
+  agent as themselves. Non-escalated cases of other agents remain un-editable (verified both
+  directions with simulated-JWT RLS tests, cleaned up afterward). Frontend: explicit green
+  "✅ Close case" button on `agent/case.html`, silent-0-rows now surfaces a friendly error, cases
+  list gains an Assigned-to column and a "My cases / Whole team" filter (defaults to mine).
+· **Daily target meter** (`agent/index.html`): SVG circular "volume bar" that fills as
+  closed-cases-today + calls-today approaches the org-wide `org_settings.daily_target`
+  (`20260711160100_daily_target_setting.sql`, default 30 "closed interactions"), turning green at
+  100% with escalating encouragement lines. Admin sets the target from `admin/settings.html`
+  (new "🎯 Daily target" card). Known simplification: closed-case credit goes to the case's
+  assignee, so closing a colleague's escalation feeds the *assignee's* meter, not the closer's —
+  fixing that properly means attributing closes via `case_status_history.changed_by`, deferred.
+· **Calls widget takes a typed value**: the "+1 Call" button is now a number input + Add button
+  (add 1 or a batch, e.g. 5 after a busy spell), validated ≥1, errors surfaced instead of
+  swallowed.
