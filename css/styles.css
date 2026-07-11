@@ -418,6 +418,18 @@ kbd {
 }
 
 @media print {
+  /* Print always in light colours, even when the dark theme is active. */
+  :root[data-theme="dark"] {
+    --primary-blue: #0033A0;
+    --light-blue: #E8F0FE;
+    --accent-blue: #0072CE;
+    --dark-blue: #002266;
+    --white: #FFFFFF;
+    --border: #D7E3FA;
+    --text-muted: #5B6B8C;
+    --shadow: none;
+  }
+
   .app-header, .sidebar, .modal-backdrop, .no-print, form, .btn, .toolbar > .btn, button {
     display: none !important;
   }

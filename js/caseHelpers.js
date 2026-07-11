@@ -2,7 +2,9 @@ export const STATUS_LABELS = {
   new: 'New',
   pending: 'Pending',
   escalated: 'Escalated',
-  awaiting_response: 'Awaiting Response',
+  awaiting_internal: 'Awaiting Internal',
+  awaiting_customer: 'Awaiting Customer',
+  awaiting_response: 'Awaiting Response', // legacy — kept so old history rows render
   resolved: 'Resolved',
   closed: 'Closed',
 };
@@ -11,7 +13,9 @@ export const STATUS_BADGE_CLASS = {
   new: 'blue',
   pending: 'orange',
   escalated: 'red',
-  awaiting_response: 'orange',
+  awaiting_internal: 'orange',
+  awaiting_customer: 'blue',
+  awaiting_response: 'orange', // legacy
   resolved: 'green',
   closed: 'grey',
 };
