@@ -816,3 +816,47 @@ Not pursued, and still won't be without being asked again:
 · **`multiple_permissive_policies`** advisor findings from v6 — still deliberately left alone,
   same reasoning as before (correct behavior, not a real bottleneck at this scale, real
   refactor risk for marginal gain).
+
+---
+
+🚨 v9 Update – Overdue-escalation notifications (2026-07-11)
+
+Direct answer to "will team leaders receive notifications when an escalation goes over SLA":
+before this, no — SLA breaches were pull-only (an admin had to open Cases and eyeball the
+timers). This closes that gap.
+
+· **`notify_overdue_escalations()`** (`supabase/migrations/20260711150000_overdue_escalation_notifications.sql`):
+  a `security definer` function scanning `cases` for rows where `status = 'escalated'` and
+  `escalation_expires_at < now()` and `escalation_overdue_notified = false`. For each match it
+  inserts a `notifications` row (type `escalation_overdue`) for the assigned agent *and* every
+  active admin, then flips `escalation_overdue_notified` so it fires once per breach, not once
+  per cron tick. Scheduled via pg_cron as `overdue-escalation-check`, every 5 minutes. EXECUTE
+  revoked from `public` (same hardening pattern as the other automation functions — these should
+  only ever run as the cron job's superuser context, not be callable by a client).
+· `handle_case_status_change()` updated alongside it: `escalation_overdue_notified` resets to
+  `false` whenever a case (re-)enters `escalated` status or its timer is changed, so editing the
+  SLA timer doesn't leave a stale "already notified" flag blocking a legitimate re-breach.
+· **Dedup fix found during live testing**: the first version double-notified when the assigned
+  agent was also an admin (two near-identical rows, one from the per-agent insert, one from the
+  admin bulk-insert). Fixed by adding `and p.id is distinct from r.assigned_to` to the admin
+  insert's `where` clause.
+· **Admin dashboard**: `admin/index.html` gets a new red-bordered "🚨 Escalations overdue" card
+  (between the stat tiles and the department table) showing a live count
+  (`status = 'escalated' and escalation_expires_at < now()`), linking through to
+  `admin/cases.html`, with the card background tinting light red when the count is non-zero —
+  the goal is an at-a-glance signal on the page every admin already lands on after login, not a
+  new page to remember to check.
+· **Notification click-through**: `agent/index.html`'s `loadNotifications()` now selects the
+  `data` jsonb column and, when a notification carries a `case_id` (currently: mentions and
+  overdue-escalation notifications), clicking it marks it read and navigates straight to
+  `/agent/case.html?id=<case_id>` instead of just toggling read state in place. Admins don't have
+  an in-app notification list (browser push only, per v8), so no equivalent change was needed
+  there.
+· Tested against a live, genuinely-overdue production case (00248490, agent Mbali Matusse) that
+  the function correctly picked up — not synthetic-only validation. A synthetic test case created
+  for the dedup-bug repro (and its resulting notifications) was deleted afterward; the real case
+  and its real notifications were left untouched.
+
+Notification types are now three: `eod_stats` (v7-ish daily digest), `case_mention` (v6,
+agent-to-agent tagging), `escalation_overdue` (this). All three ride the same `notifications`
+table, RLS, and Realtime/browser-push plumbing from v8 — no new infra needed to add this one.

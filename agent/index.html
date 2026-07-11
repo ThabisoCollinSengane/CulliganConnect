@@ -240,7 +240,7 @@
     async function loadNotifications() {
       const { data, error } = await supabase
         .from('notifications')
-        .select('id, title, body, is_read, created_at')
+        .select('id, title, body, is_read, created_at, data')
         .eq('user_id', profile.id)
         .order('created_at', { ascending: false })
         .limit(10);
@@ -258,6 +258,7 @@
       }
 
       for (const n of data) {
+        const caseId = n.data?.case_id;
         const row = document.createElement('div');
         row.style.cssText = 'padding:10px 0; border-bottom:1px solid var(--border);';
         row.innerHTML = `
@@ -267,10 +268,16 @@
           </div>
           <div class="hint">${n.body || ''}</div>
         `;
-        if (!n.is_read) {
+        if (!n.is_read || caseId) {
           row.style.cursor = 'pointer';
           row.addEventListener('click', async () => {
-            await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+            if (!n.is_read) {
+              await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+            }
+            if (caseId) {
+              window.location.href = `/agent/case.html?id=${caseId}`;
+              return;
+            }
             loadNotifications();
           });
         }
