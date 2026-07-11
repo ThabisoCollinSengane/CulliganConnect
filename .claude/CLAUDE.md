@@ -724,5 +724,54 @@ All test rows cleaned up afterward.
 
 Still not built: real-time browser push notifications (in-app notification list exists;
 OS-level `Notification` API is not wired up), auto-save on notes (currently save-on-submit
-only), keyboard shortcuts, a standalone "Quick Notes" sidebar widget, and PDF export. These are
-lower-value/higher-effort relative to what shipped this round.
+only), keyboard shortcuts, and PDF export. The "Quick Notes" widget from that list *is* now
+built — see v7 below.
+
+---
+
+🎮 v7 Update – Personal templates, notepad, calls, targets, gamification (2026-07-11)
+
+Four new tables, no changes to existing ones' shapes (`email_templates` gained one column):
+
+· `email_templates.is_shared` (bool, default true) — admin-created templates are shared/default
+  (`is_shared = true`); agents can add their own personal ones (forced `is_shared = false` by
+  the `enforce_email_template_sharing()` trigger regardless of what the client sends — don't
+  rely on client-side enforcement of this). SELECT policy shows shared rows plus your own.
+  `agent/templates.html` renders these as two separate sections ("Team templates" read-only,
+  "My templates" with add/delete). 5 example shared templates seeded
+  (`20260711130500_seed_default_email_templates.sql`, guarded to only run if an admin profile
+  exists — safe to re-run against a fresh environment, was *not* re-applied to the already-seeded
+  live project since it has no dedupe-on-name logic).
+· `quick_notes` — a personal notepad, not tied to any case (`agent/templates.html`, "📝 Notepad"
+  section). Owner-only RLS, admin override.
+· `call_logs` — one row per agent per day (`unique(agent_id, call_date)`), incremented via a
+  "+1 Call" button on the agent dashboard rather than a manual count field, to make daily logging
+  frictionless. Feeds into `admin/reports.html` (new "Calls taken" column + CSV column) and into
+  target progress for the `calls_taken` metric.
+· `targets` — `agent_id` nullable: a normal row is a personal target (agent sets their own via
+  `agent/settings.html`, RLS `agents_manage_own_targets`); `agent_id IS NULL` is a **team-wide**
+  target admins set from `admin/users.html` ("Set team target" button, alongside a per-row
+  "Target" button for individual agents), visible to every agent via a separate
+  `agents_read_team_targets` SELECT policy. Progress for a team-wide target is the **team's
+  total** for the metric/period, not the viewing agent's own number — consistent with the
+  collective framing already used for EOD stats. Progress is computed client-side
+  (`metricValue()` in both `agent/settings.html` and reused inline elsewhere), not stored.
+
+**Gamification** (agent/settings.html + a preview on agent/index.html): a monthly leaderboard
+ranked by the existing weighted-score formula (closed×2 + interacted×1) — full top-5 + "your
+rank" on the settings page, top-3 preview on the dashboard. Badges are computed client-side from
+already-fetched stats (no `badges` table) — thresholds like "10 closed this month", "5 closed
+this week", "50 calls this week". This is a deliberate reversal of the earlier "leaderboards
+default to admin-only" decision from v2 — the user explicitly asked to gamify the agent side, so
+the visible-to-everyone leaderboard is intentional now, not an oversight.
+
+Also added, opportunistically, because building the targets/stats page surfaced that nobody had
+any way to do it: a **change password** form on `agent/settings.html` using
+`supabase.auth.updateUser()`. Every password on this account so far has been set by an admin
+issuing raw SQL — this is the first self-service path that exists.
+
+RLS re-verified the same way as v5/v6: a throwaway test agent (`set local role authenticated` +
+simulated JWT) exercising insert on all four changed/new tables, confirming the sharing-trigger
+actually overrides a client that lies about `is_shared`, and confirming a team-wide target
+created by the real admin account is visible to a different, unrelated agent session. Cleaned up
+afterward.

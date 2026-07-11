@@ -75,7 +75,7 @@
           </div>
         </div>
         <table id="ranking-table">
-          <thead><tr><th>#</th><th>Agent</th><th>Department</th><th>Closed</th><th>Interacted</th><th>Escalated</th><th>SLA breaches</th><th>Weighted</th></tr></thead>
+          <thead><tr><th>#</th><th>Agent</th><th>Department</th><th>Closed</th><th>Interacted</th><th>Calls taken</th><th>Escalated</th><th>SLA breaches</th><th>Weighted</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -164,7 +164,7 @@
       const today = new Date().toISOString().slice(0, 10);
 
       const rows = await Promise.all((agentList || []).map(async (agent) => {
-        const [{ count: closed }, { data: notes }, { count: escalated }, { count: slaBreaches }] = await Promise.all([
+        const [{ count: closed }, { data: notes }, { count: escalated }, { count: slaBreaches }, { data: calls }] = await Promise.all([
           supabase.from('cases').select('id', { count: 'exact', head: true })
             .eq('assigned_to', agent.id).gte('closed_at', from.toISOString()).lte('closed_at', to.toISOString()),
           supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
@@ -173,14 +173,18 @@
             .eq('assigned_to', agent.id).gte('escalated_at', from.toISOString()).lte('escalated_at', to.toISOString()),
           supabase.from('cases').select('id', { count: 'exact', head: true })
             .eq('assigned_to', agent.id).lt('sla_date', today).is('closed_at', null),
+          supabase.from('call_logs').select('calls_taken')
+            .eq('agent_id', agent.id).gte('call_date', from.toISOString().slice(0, 10)).lte('call_date', to.toISOString().slice(0, 10)),
         ]);
 
         const interacted = new Set((notes || []).map(n => n.case_id)).size;
         const closedCount = closed || 0;
+        const callsTaken = (calls || []).reduce((s, c) => s + c.calls_taken, 0);
         return {
           agent,
           closed: closedCount,
           interacted,
+          callsTaken,
           escalated: escalated || 0,
           slaBreaches: slaBreaches || 0,
           weighted: closedCount * 2 + interacted,
@@ -201,7 +205,7 @@
       const tbody = document.querySelector('#ranking-table tbody');
       tbody.innerHTML = '';
       if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="hint">No agents match this filter.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="hint">No agents match this filter.</td></tr>';
         return;
       }
       rows.forEach((r, i) => {
@@ -212,6 +216,7 @@
           <td>${r.agent.departments?.name || '—'}</td>
           <td>${r.closed}</td>
           <td>${r.interacted}</td>
+          <td>${r.callsTaken}</td>
           <td>${r.escalated}</td>
           <td>${r.slaBreaches}</td>
           <td>${r.weighted}</td>
@@ -222,9 +227,9 @@
 
     document.getElementById('export-csv-btn').addEventListener('click', () => {
       if (!lastResults) return;
-      const header = 'Rank,Agent,Department,Closed,Interacted,Escalated,SLA Breaches,Weighted\n';
+      const header = 'Rank,Agent,Department,Closed,Interacted,Calls Taken,Escalated,SLA Breaches,Weighted\n';
       const rows = lastResults.map((r, i) =>
-        [i + 1, r.agent.full_name, r.agent.departments?.name || '', r.closed, r.interacted, r.escalated, r.slaBreaches, r.weighted]
+        [i + 1, r.agent.full_name, r.agent.departments?.name || '', r.closed, r.interacted, r.callsTaken, r.escalated, r.slaBreaches, r.weighted]
           .map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
       ).join('\n');
       const blob = new Blob([header + rows], { type: 'text/csv' });

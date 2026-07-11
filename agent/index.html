@@ -13,6 +13,7 @@
       <a href="/agent/index.html" class="active">My Day</a>
       <a href="/agent/cases.html">Cases</a>
       <a href="/agent/templates.html">Templates</a>
+      <a href="/agent/settings.html">Settings</a>
       <a href="#" id="logout-link">Sign out</a>
     </nav>
   </header>
@@ -22,6 +23,7 @@
       <a href="/agent/index.html" class="active">My Day</a>
       <a href="/agent/cases.html">All Cases</a>
       <a href="/agent/templates.html">Templates</a>
+      <a href="/agent/settings.html">Settings</a>
     </aside>
 
     <main class="main">
@@ -40,10 +42,29 @@
 
       <div class="card">
         <div class="toolbar">
+          <h3 style="margin:0;">📞 Calls today</h3>
+          <button class="btn" id="add-call-btn">+1 Call</button>
+        </div>
+        <div class="value" id="calls-today" style="font-size:2rem; color:var(--primary-blue);">0</div>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
           <h3 style="margin:0;">How's your day going?</h3>
         </div>
         <div id="mood-picker" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
         <p class="success-text hidden" id="mood-saved">Saved — thanks for checking in.</p>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">🏆 Leaderboard (this month)</h3>
+          <a class="btn secondary" href="/agent/settings.html">View full</a>
+        </div>
+        <table id="mini-leaderboard-table">
+          <thead><tr><th>#</th><th>Agent</th><th>Score</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
 
       <div class="card">
@@ -81,6 +102,8 @@
         loadNotifications(),
         loadMyDay(),
         loadTodayMood(),
+        loadCallsToday(),
+        loadMiniLeaderboard(),
       ]);
     }
 
@@ -88,6 +111,56 @@
       e.preventDefault();
       signOut();
     });
+
+    async function loadCallsToday() {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data } = await supabase.from('call_logs').select('calls_taken')
+        .eq('agent_id', profile.id).eq('call_date', today).maybeSingle();
+      document.getElementById('calls-today').textContent = data?.calls_taken ?? 0;
+    }
+
+    document.getElementById('add-call-btn').addEventListener('click', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: existing } = await supabase.from('call_logs').select('id, calls_taken')
+        .eq('agent_id', profile.id).eq('call_date', today).maybeSingle();
+
+      if (existing) {
+        await supabase.from('call_logs').update({ calls_taken: existing.calls_taken + 1 }).eq('id', existing.id);
+      } else {
+        await supabase.from('call_logs').insert({ agent_id: profile.id, call_date: today, calls_taken: 1 });
+      }
+      await loadCallsToday();
+    });
+
+    async function loadMiniLeaderboard() {
+      const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const { data: agentList } = await supabase.from('profiles').select('id, full_name').eq('role', 'agent').eq('is_active', true);
+
+      const rows = await Promise.all((agentList || []).map(async (a) => {
+        const [{ count: closed }, { data: notes }] = await Promise.all([
+          supabase.from('cases').select('id', { count: 'exact', head: true })
+            .eq('assigned_to', a.id).gte('closed_at', monthStart.toISOString()),
+          supabase.from('case_notes').select('case_id, cases!inner(assigned_to)')
+            .eq('cases.assigned_to', a.id).gte('created_at', monthStart.toISOString()),
+        ]);
+        const interacted = new Set((notes || []).map(n => n.case_id)).size;
+        return { agent: a, weighted: (closed || 0) * 2 + interacted };
+      }));
+
+      rows.sort((a, b) => b.weighted - a.weighted);
+
+      const tbody = document.querySelector('#mini-leaderboard-table tbody');
+      tbody.innerHTML = '';
+      rows.slice(0, 3).forEach((r, i) => {
+        const tr = document.createElement('tr');
+        if (r.agent.id === profile.id) tr.style.background = 'var(--light-blue)';
+        tr.innerHTML = `<td>${i + 1}${i === 0 ? ' 🏆' : ''}</td><td>${r.agent.full_name}</td><td>${r.weighted}</td>`;
+        tbody.appendChild(tr);
+      });
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="hint">No data yet.</td></tr>';
+      }
+    }
 
     const MOODS = [
       { key: 'great', label: '😄 Great' },
