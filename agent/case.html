@@ -82,7 +82,9 @@
             </div>
           </div>
           <button class="btn" id="save-status-btn">Save</button>
+          <button class="btn" id="close-case-btn" style="background:var(--green);">✅ Close case</button>
         </div>
+        <p class="hint" id="close-hint" style="margin-top:8px;">Closing an escalated case ends its SLA timer and counts toward your daily target.</p>
         <p class="error-text hidden" id="status-error"></p>
       </div>
 
@@ -220,7 +222,7 @@
     async function loadCase() {
       const { data, error } = await supabase
         .from('cases')
-        .select('*, case_types(name), service_centres(id, code, name, depot_email, cc_contacts), escalation_reasons(id, name)')
+        .select('*, case_types(name), service_centres(id, code, name, depot_email, cc_contacts), escalation_reasons(id, name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
         .eq('id', caseId)
         .single();
 
@@ -256,6 +258,7 @@
         ['SLA date', currentCase.sla_date],
         ['Times escalated', currentCase.times_escalated],
         ['Service centre', currentCase.service_centres?.name],
+        ['Assigned to', currentCase.assigned_agent?.full_name],
       ];
       grid.innerHTML = rows.map(([label, value]) =>
         `<div><div class="hint">${label}</div><div>${value || '—'}</div></div>`
@@ -289,9 +292,37 @@
         update.callback_arranged = document.getElementById('callback-arranged').value || null;
       }
 
-      const { error } = await supabase.from('cases').update(update).eq('id', caseId);
+      const { data: updated, error } = await supabase.from('cases').update(update).eq('id', caseId).select('id');
       if (error) {
         errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      if (!updated || updated.length === 0) {
+        errorEl.textContent = 'You can only change cases assigned to you, or any escalated case. Ask an admin to reassign this one.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      await loadCase();
+      await loadHistory();
+    });
+
+    document.getElementById('close-case-btn').addEventListener('click', async () => {
+      if (!currentCase) return;
+      if (!confirm(`Close case ${currentCase.case_number}? This ends any escalation timer.`)) return;
+
+      const errorEl = document.getElementById('status-error');
+      errorEl.classList.add('hidden');
+
+      const { data: updated, error } = await supabase.from('cases')
+        .update({ status: 'closed' }).eq('id', caseId).select('id');
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      if (!updated || updated.length === 0) {
+        errorEl.textContent = 'You can only close cases assigned to you, or any escalated case. Ask an admin to reassign this one.';
         errorEl.classList.remove('hidden');
         return;
       }

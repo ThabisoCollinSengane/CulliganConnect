@@ -37,7 +37,7 @@
         <div class="toolbar">
           <div>
             <h2 style="margin:0;">Email templates</h2>
-            <p class="hint">Canned responses agents can copy for common situations (e.g. "Delivery delayed").</p>
+            <p class="hint">These are the defaults agents use from their Templates page. Write fill-in fields in square brackets — e.g. [ACCOUNT NUMBER], [TASK NUMBER], [DATE] — and agents will be asked for those values when they hit "Use", generating the finished email automatically.</p>
           </div>
           <button class="btn" id="new-email-template-btn">+ Add template</button>
         </div>
@@ -69,6 +69,7 @@
         <div class="form-row"><label>Category</label><input id="et-category" placeholder="e.g. Delivery" /></div>
         <div class="form-row"><label>Subject</label><input id="et-subject" required /></div>
         <div class="form-row"><label>Body</label><textarea id="et-body" rows="8" required></textarea></div>
+        <p class="hint">Use square brackets for anything the agent should fill in: [ACCOUNT NUMBER], [TASK NUMBER], [DATE], [YOUR NAME] (auto-filled with the agent's name).</p>
         <p class="error-text hidden" id="email-modal-error"></p>
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="email-modal-cancel">Cancel</button>

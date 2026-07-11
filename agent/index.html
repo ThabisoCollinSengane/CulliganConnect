@@ -41,11 +41,34 @@
       </div>
 
       <div class="card">
+        <div style="display:flex; gap:24px; align-items:center; flex-wrap:wrap;">
+          <svg id="daily-meter" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="Daily target progress">
+            <circle cx="80" cy="80" r="64" fill="none" stroke="var(--border)" stroke-width="14"/>
+            <circle id="meter-progress" cx="80" cy="80" r="64" fill="none" stroke="var(--accent-blue)" stroke-width="14"
+              stroke-linecap="round" transform="rotate(-90 80 80)"
+              stroke-dasharray="402.12" stroke-dashoffset="402.12"
+              style="transition: stroke-dashoffset 0.8s ease, stroke 0.4s;"/>
+            <text id="meter-pct" x="80" y="78" text-anchor="middle" font-size="28" font-weight="700" fill="var(--primary-blue)">0%</text>
+            <text id="meter-count" x="80" y="102" text-anchor="middle" font-size="13" fill="var(--text-muted)">0 / 30</text>
+          </svg>
+          <div style="flex:1; min-width:200px;">
+            <h3 style="margin:0 0 6px;">🎯 Daily target</h3>
+            <p class="hint" style="margin:0;">Closed cases + calls taken today, filling toward the team-wide daily target set by your admin.</p>
+            <p id="meter-message" style="margin:10px 0 0; font-weight:600; color:var(--accent-blue);"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="toolbar">
           <h3 style="margin:0;">📞 Calls today</h3>
-          <button class="btn" id="add-call-btn">+1 Call</button>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input type="number" id="calls-amount" min="1" step="1" value="1" style="width:90px;" />
+            <button class="btn" id="add-call-btn">Add</button>
+          </div>
         </div>
         <div class="value" id="calls-today" style="font-size:2rem; color:var(--primary-blue);">0</div>
+        <p class="hint">Log calls as you take them — one at a time, or type a number to add a batch after a busy spell. Calls count toward your daily target and team stats.</p>
       </div>
 
       <div class="card">
@@ -92,6 +115,12 @@
     import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['agent', 'admin']);
+
+    // Daily meter state: closed interactions = cases closed today + calls today.
+    let dailyTarget = 30;
+    let todayClosed = 0;
+    let todayCalls = 0;
+
     if (profile) {
       subscribeToNotifications(profile.id, () => loadNotifications());
       document.getElementById('welcome-msg').textContent = timeGreeting(profile.full_name || profile.email);
@@ -99,6 +128,7 @@
         document.getElementById('welcome-motivation').textContent = line;
       });
       renderMoodPicker();
+      await loadDailyTarget();
       await Promise.all([
         loadTodayStats(),
         loadNotifications(),
@@ -107,6 +137,34 @@
         loadCallsToday(),
         loadMiniLeaderboard(),
       ]);
+    }
+
+    async function loadDailyTarget() {
+      const { data } = await supabase.from('org_settings').select('daily_target').eq('id', true).maybeSingle();
+      dailyTarget = data?.daily_target || 30;
+      updateMeter();
+    }
+
+    function updateMeter() {
+      const done = todayClosed + todayCalls;
+      const pct = Math.min(100, Math.round((done / dailyTarget) * 100));
+      const circumference = 402.12;
+
+      const progress = document.getElementById('meter-progress');
+      progress.setAttribute('stroke-dashoffset', String(circumference * (1 - pct / 100)));
+      progress.setAttribute('stroke', pct >= 100 ? 'var(--green)' : 'var(--accent-blue)');
+
+      const pctText = document.getElementById('meter-pct');
+      pctText.textContent = `${pct}%`;
+      pctText.setAttribute('fill', pct >= 100 ? 'var(--green)' : 'var(--primary-blue)');
+      document.getElementById('meter-count').textContent = `${done} / ${dailyTarget}`;
+
+      const msg = document.getElementById('meter-message');
+      if (done === 0) msg.textContent = 'Let’s get the first one on the board!';
+      else if (pct < 50) msg.textContent = 'Nice pace — keep it rolling.';
+      else if (pct < 100) msg.textContent = 'Over halfway. Push for the target!';
+      else msg.textContent = '🎉 Target smashed — everything from here is bonus.';
+      msg.style.color = pct >= 100 ? 'var(--green)' : 'var(--accent-blue)';
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
@@ -118,19 +176,31 @@
       const today = new Date().toISOString().slice(0, 10);
       const { data } = await supabase.from('call_logs').select('calls_taken')
         .eq('agent_id', profile.id).eq('call_date', today).maybeSingle();
-      document.getElementById('calls-today').textContent = data?.calls_taken ?? 0;
+      todayCalls = data?.calls_taken ?? 0;
+      document.getElementById('calls-today').textContent = todayCalls;
+      updateMeter();
     }
 
     document.getElementById('add-call-btn').addEventListener('click', async () => {
+      const amount = parseInt(document.getElementById('calls-amount').value, 10);
+      if (!Number.isFinite(amount) || amount < 1) {
+        document.getElementById('calls-amount').value = '1';
+        return;
+      }
+
       const today = new Date().toISOString().slice(0, 10);
       const { data: existing } = await supabase.from('call_logs').select('id, calls_taken')
         .eq('agent_id', profile.id).eq('call_date', today).maybeSingle();
 
-      if (existing) {
-        await supabase.from('call_logs').update({ calls_taken: existing.calls_taken + 1 }).eq('id', existing.id);
-      } else {
-        await supabase.from('call_logs').insert({ agent_id: profile.id, call_date: today, calls_taken: 1 });
+      const { error } = existing
+        ? await supabase.from('call_logs').update({ calls_taken: existing.calls_taken + amount }).eq('id', existing.id)
+        : await supabase.from('call_logs').insert({ agent_id: profile.id, call_date: today, calls_taken: amount });
+
+      if (error) {
+        alert(error.message);
+        return;
       }
+      document.getElementById('calls-amount').value = '1';
       await loadCallsToday();
     });
 
@@ -231,10 +301,12 @@
           .eq('assigned_to', profile.id).not('status', 'in', '("closed","resolved")'),
       ]);
 
-      document.getElementById('stat-closed').textContent = closed ?? 0;
+      todayClosed = closed ?? 0;
+      document.getElementById('stat-closed').textContent = todayClosed;
       document.getElementById('stat-interacted').textContent = new Set((notes || []).map(n => n.case_id)).size;
       document.getElementById('stat-escalated').textContent = escalated ?? 0;
       document.getElementById('stat-open').textContent = open ?? 0;
+      updateMeter();
     }
 
     async function loadNotifications() {
