@@ -59,6 +59,13 @@
       </a>
 
       <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">🔔 Notifications</h3>
+        </div>
+        <div id="notifications-list"></div>
+      </div>
+
+      <div class="card">
         <h3 style="margin:0 0 4px;">💙 Team morale (last 7 days)</h3>
         <p class="hint" style="margin:0 0 10px;">From the daily mood check-in on agents' dashboards. Sustained stress gets flagged below.</p>
         <div id="mood-bars"></div>
@@ -84,18 +91,66 @@
 
     const profile = await requireRole(['admin']);
     if (profile) {
-      subscribeToNotifications(profile.id);
+      subscribeToNotifications(profile.id, () => loadNotifications());
       document.getElementById('welcome-msg').textContent = timeGreeting(profile.full_name || profile.email);
       teamMotivationalLine(supabase).then(line => {
         document.getElementById('welcome-motivation').textContent = line;
       });
-      await Promise.all([loadStats(), loadMoodInsights()]);
+      await Promise.all([loadStats(), loadMoodInsights(), loadNotifications()]);
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
       e.preventDefault();
       signOut();
     });
+
+    async function loadNotifications() {
+      const { data, error } = await supabase
+        .from('notifications')
+        .select('id, title, body, is_read, created_at, data')
+        .eq('user_id', profile.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      const list = document.getElementById('notifications-list');
+      list.innerHTML = '';
+
+      if (error) {
+        list.innerHTML = `<p class="error-text">${error.message}</p>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">Nothing yet.</p>';
+        return;
+      }
+
+      for (const n of data) {
+        const caseId = n.data?.case_id;
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:10px 0; border-bottom:1px solid var(--border);';
+        row.innerHTML = `
+          <div style="display:flex; justify-content:space-between; gap:10px;">
+            <strong>${n.is_read ? '' : '🔵 '}${n.title}</strong>
+            <span class="hint">${new Date(n.created_at).toLocaleString()}</span>
+          </div>
+          <div class="hint">${n.body || ''}</div>
+        `;
+        if (!n.is_read || caseId) {
+          row.style.cursor = 'pointer';
+          row.addEventListener('click', async () => {
+            if (!n.is_read) {
+              await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+            }
+            if (caseId) {
+              window.location.href = `/agent/case.html?id=${caseId}`;
+              return;
+            }
+            loadNotifications();
+          });
+        }
+        list.appendChild(row);
+      }
+    }
 
     async function loadMoodInsights() {
       const weekAgo = new Date();

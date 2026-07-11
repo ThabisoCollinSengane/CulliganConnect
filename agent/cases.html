@@ -70,6 +70,7 @@
         </div>
         <div class="form-row"><label>Task number</label><input id="nc-task" /></div>
         <div class="form-row"><label>Work order number</label><input id="nc-workorder" /></div>
+        <div class="form-row"><label>Quantity (units)</label><input id="nc-quantity" type="number" min="0" step="1" /></div>
         <div class="form-row"><label>Customer name</label><input id="nc-customer-name" /></div>
         <div class="form-row"><label>Customer phone</label><input id="nc-customer-phone" /></div>
         <div class="form-row"><label>Customer email</label><input id="nc-customer-email" type="email" /></div>
@@ -252,6 +253,7 @@
         account_number: document.getElementById('nc-account').value.trim() || null,
         task_number: document.getElementById('nc-task').value.trim() || null,
         work_order_number: document.getElementById('nc-workorder').value.trim() || null,
+        quantity: document.getElementById('nc-quantity').value ? parseInt(document.getElementById('nc-quantity').value, 10) : null,
         customer_name: document.getElementById('nc-customer-name').value.trim() || null,
         customer_phone: document.getElementById('nc-customer-phone').value.trim() || null,
         customer_email: document.getElementById('nc-customer-email').value.trim() || null,
