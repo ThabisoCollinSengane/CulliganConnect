@@ -1145,3 +1145,29 @@ now shows on the case detail page. Verified insert live (rolled back).
   per-agent table (agent · calls · last-updated), sorted by calls. Reads `call_logs` for today
   (admin RLS `admins_all_call_logs`), embed via `call_logs.agent_id → profiles`. No schema change
   (`call_logs.updated_at` already existed).
+
+---
+
+⏱ v18 Update – Department assignment fix + case lifetime (time-to-close) tracking (2026-07-12)
+
+· **Department assignment was read-only — real bug**: `admin/users.html` had a working per-row
+  Team dropdown but the Department column was always plain text set only once, at agent creation.
+  Fixed by mirroring the team-select pattern: `deptOptions()` + a per-row `.dept-select` updating
+  `profiles.department_id` (same `admins_update_profiles` RLS policy already covers it, verified
+  no schema change needed — `profiles.department_id` already existed).
+· **Case lifetime ("time to close") tracking** (`admin/reports.html`, no schema change — reuses
+  existing `cases.created_at`/`closed_at`): the user asked for a timer on "the life of a case"
+  that doesn't need to be a literal on-screen countdown, only the resulting duration once a case
+  closes, compared against the team average. Implemented as a computed stat, not a stored timer:
+  for each agent's closed cases in the selected date range, `closed_at - created_at` in hours is
+  averaged; the team average is computed from every individual case's duration (not an average of
+  averages, so agents who closed more cases weigh it proportionally). New "Avg. time to close"
+  column shows the duration plus a badge — 🟢 "▼N% faster" / 🟠 "▲N% slower" / grey "on par"
+  (±5% threshold) — versus the team average. Flows through everywhere else the report already
+  goes: CSV export (raw hours + % vs team), PDF export (formatted duration + team-average footer
+  row), and the generated email summary (new "Avg. time to close a case" line). A hint line above
+  the table states the team average in plain language. Verified live against real closed cases
+  (12m and 1d 10h) before shipping.
+· This is exactly the "how long to close vs the average across all agents" stat the user asked
+  for — deliberately lightweight (no new cron job, no new table) since `created_at`/`closed_at`
+  already captured everything needed.
