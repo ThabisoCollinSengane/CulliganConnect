@@ -1171,3 +1171,29 @@ now shows on the case detail page. Verified insert live (rolled back).
 · This is exactly the "how long to close vs the average across all agents" stat the user asked
   for — deliberately lightweight (no new cron job, no new table) since `created_at`/`closed_at`
   already captured everything needed.
+
+---
+
+✅ v19 Update – Closing a case now visibly confirms it (2026-07-12)
+
+User report: "cases aren't updating for users once closed... it didn't do anything." Investigated
+the backend first (`cases.closed_at`/`closed_by`/`updated_at` on real closed cases) — the close
+action was working correctly and persisting every time. The bug was UX, not data: closing a case
+gave **zero visible feedback**. No success message, and the Close/Save buttons, escalation fields,
+and page layout looked identical before and after — the only change was a small badge in the page
+title. Clicking Close, confirming the dialog, and seeing the exact same page back is a completely
+reasonable "did that even do anything?" moment.
+
+Fixed in `agent/case.html`:
+· A `showStatusSuccess()` toast (green success text) after Save / Assign-to-me / Close, auto-
+  hiding after 4s.
+· Once a case is `closed` or `resolved`, `renderStatusForm()` now hides the Close button, hides
+  the "closing ends the SLA timer" hint, hides Assign-to-me, and shows a persistent green
+  **"✅ This case is closed"** banner with who closed it and when (new `closed_by_agent` join via
+  `cases_closed_by_fkey`, verified live under simulated agent RLS). Re-clicking an already-hidden
+  Close button is also now a no-op guard in the handler itself, not just visually.
+· Added a "Closed at" row to the case details grid, so it's visible even without scrolling to the
+  status card.
+
+No schema or backend change — `closed_at`/`closed_by` already existed and were already correct;
+this is purely making the existing correct state legible to the user.
