@@ -1225,3 +1225,75 @@ extras (notifications, bulk-close, admin list columns).
   charting library added.
 · Two queries total (`cases` + `escalation_audit`, both `gte(closed_at, weekStart[0])`), bucketed
   client-side by week — not 8 separate per-week queries.
+
+---
+
+🎮 v21 Update – Gamification: streaks, activity feed, team leaderboard, badges (2026-07-12)
+
+User asked for gamification ideas so agents self-motivate with less teamleader prodding. Picked
+4 of 6 proposed items — streaks, a live activity feed, team-vs-team leaderboard, persisted
+achievement badges — and explicitly asked to factor escalation rate into scoring, guarding against
+the obvious risk of agents rushing closes to farm volume at the expense of escalation quality.
+"Most improved" spotlight and head-to-head duels were proposed but NOT requested — not built.
+
+**Schema** (`activity_feed`, `badges` tables; widened `escalation_audit` read policy):
+· `activity_feed` — company-wide "who did what" ticker. `type` is `'case_closed'` (trigger-only,
+  security definer, clients cannot forge this) or `'badge'` (client self-insert, `with_check
+  (actor_id = auth.uid() and type = 'badge')` — verified live that an agent CANNOT insert a
+  `case_closed` row as themselves; RLS correctly rejects it). Added to the realtime publication.
+· `badges` — persisted, collectible, team-visible achievements. `unique(agent_id, badge_key)`
+  makes client-side awarding idempotent; badges are never revoked once earned. Client computes
+  eligibility, filters against what's already owned, inserts only the new ones.
+· `escalation_audit` SELECT widened from own-escalations-only to team-wide (same shared-queue
+  model as cases/notes/status-history) — needed so leaderboards can score escalation quality
+  across every agent, not just the viewer's own.
+· `handle_case_status_change()` extended to insert a `case_closed` activity_feed row whenever a
+  case transitions into `closed`/`resolved`.
+
+**Scoring — escalation quality now a first-class factor, not just a display column**
+`js/gamification.js`'s `weightedScore()`: `raw = closed*2 + interacted`; if the agent closed zero
+escalations in the period, score = raw (no penalty, nothing to penalize). Otherwise `score =
+round(raw * (1 - breachRate * 0.5))` where `breachRate = escBreached / escClosed` — a 100% breach
+rate roughly halves the score, a 0% breach rate leaves it untouched. Applied everywhere a weighted
+score is shown: My Day mini-leaderboard, Settings agent leaderboard, Settings team leaderboard,
+and Admin Reports' rank-by-weighted-score option (previously a flat `closed*2 + interacted` with
+no quality signal at all).
+
+**Bug found and fixed while wiring this up**: `escalation_audit.closed_by` had silently never been
+populated by the trigger since the column was added in an earlier migration — every real
+historical row had `closed_by = null`. Found by querying real rows directly rather than trusting
+the migration history. Would have silently broken the new escalation-quality scoring, since it
+filters `escalation_audit` by `closed_by = agentId`. Fixed by adding `closed_by = auth.uid()` to
+the trigger's `update escalation_audit ... where case_id = new.id and closed_at is null` block,
+and backfilling the 3 pre-existing rows from `cases.closed_by` (falling back to `escalated_by`).
+Verified the fix under a properly simulated authenticated session (`set_config('request.jwt.claims',
+...)`) — an earlier raw-superuser-session test had wrongly suggested the fix didn't work, because
+`auth.uid()` is null outside of a real/simulated JWT context regardless of trigger correctness;
+re-testing with the correct methodology confirmed `closed_by` populates correctly.
+
+**Streaks** (`computeStreak()` in `js/gamification.js`, surfaced in `agent/index.html` as a 🔥 pill
+next to the Daily target card): Duolingo-style — walks backward day by day from today, summing
+closed cases + calls taken per day against `dailyTarget`. Today only counts once it actually hits
+target, so a still-in-progress day doesn't zero out yesterday's streak; the pill shows "keep it
+alive today!" when today hasn't hit target yet but the streak is still intact from prior days.
+
+**Live activity feed** (`js/activityFeed.js`, new "⚡ Team activity" card on `agent/index.html`,
+directly below the mini-leaderboard): realtime-subscribed via `postgres_changes` INSERT on
+`activity_feed` (team-wide, no `filter` — every agent sees every event), re-fetches and re-renders
+the last 15 rows on any new insert. Renders case-closed and badge events with the actor's name via
+a `profiles` join.
+
+**Badges** (`checkAndAwardBadges()`): lifetime closes (1/50/100/250), lifetime calls (500), weekly
+closes (5, keyed by ISO week so it re-qualifies each week), weekly calls (50), streak length
+(3/5/10 days), and an `escalation_specialist` badge (10+ escalations closed with the agent's own
+breach rate at or below the team's). New badges trigger a toast on My Day and a persisted,
+team-visible chip on Settings → Achievements (`agent/settings.html`, renamed from the old
+ephemeral client-computed "Badges" card, which is removed — badges are now real rows, not a
+recomputed-on-every-load display).
+
+**Team leaderboard** (`computeTeamLeaderboard()`, new "🏁 Team leaderboard (this month)" card on
+Settings, below the existing per-agent ranking): sums each active agent's escalation-adjusted
+weighted score by `profiles.team_id`, ranked by team. Requires the Teams feature (added earlier)
+to have teams populated — falls back to a friendly empty state ("No teams set up yet") otherwise.
+`profile.team_id` is now selected in `js/auth.js`'s shared profile fetch so every page has it
+available without a separate query.
