@@ -108,7 +108,7 @@
         <p class="error-text hidden" id="nc-error"></p>
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="nc-cancel">Cancel</button>
-          <button type="submit" class="btn" id="nc-save">Submit case</button>
+          <button type="submit" class="btn" id="nc-save">Create and escalate case</button>
         </div>
       </form>
     </div>
@@ -338,7 +338,7 @@
       const saveBtn = document.getElementById('nc-save');
       saveBtn.disabled = true;
 
-      const { error } = await supabase.from('cases').insert({
+      const { data: created, error } = await supabase.from('cases').insert({
         case_number: document.getElementById('nc-case-number').value.trim() || null,
         account_number: document.getElementById('nc-account').value.trim() || null,
         task_number: document.getElementById('nc-task').value.trim() || null,
@@ -353,7 +353,7 @@
         assigned_to: profile.id,
         status: 'new',
         source: 'manual',
-      });
+      }).select('id').single();
 
       saveBtn.disabled = false;
 
@@ -363,10 +363,10 @@
         return;
       }
 
-      modal.classList.add('hidden');
-      document.getElementById('new-case-form').reset();
-      await Promise.all([loadCases(), loadSubmissionHistory()]);
-      showToast('<strong>✅ Case submitted</strong>');
+      // "Create and escalate" — land straight on the new case with the
+      // escalation form pre-filled instead of leaving the agent to find it
+      // in the list and select "Escalated" themselves.
+      window.location.href = `/agent/case.html?id=${created.id}&action=escalate`;
     });
 
     const quickModal = document.getElementById('quick-modal-backdrop');

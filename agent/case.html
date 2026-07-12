@@ -259,6 +259,7 @@
       currentCase = data;
       renderCaseHeader();
       renderStatusForm();
+      maybePrefillEscalation();
       await renderTemplateCard();
     }
 
@@ -315,6 +316,19 @@
         document.getElementById('closed-banner-detail').textContent =
           [who && `Closed by ${who}`, when].filter(Boolean).join(' · ');
       }
+    }
+
+    // "Create and escalate case" lands here with ?action=escalate — pre-fill
+    // (not save) the status dropdown so the escalation form is right there,
+    // ready to fill in, instead of the agent having to select it themselves.
+    function maybePrefillEscalation() {
+      const isClosed = currentCase.status === 'closed' || currentCase.status === 'resolved';
+      if (new URLSearchParams(window.location.search).get('action') !== 'escalate') return;
+      if (currentCase.status === 'escalated' || isClosed) return;
+
+      document.getElementById('status-select').value = 'escalated';
+      document.getElementById('escalation-fields').classList.remove('hidden');
+      document.getElementById('escalation-reason').focus();
     }
 
     document.getElementById('status-select').addEventListener('change', (e) => {
