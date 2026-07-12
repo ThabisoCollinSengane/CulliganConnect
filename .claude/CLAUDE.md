@@ -1476,3 +1476,38 @@ centre with no UI to ask for them). Implemented as:
 Quick Case submission (v23) is unchanged — that flow remains create+close-in-one-click for cases
 already resolved in Salesforce; this is the opposite case (needs escalation), handled by getting
 the agent to the right screen faster rather than skipping the screen.
+
+---
+
+📋 v26 Update – Escalation template preview before saving; Notepad loses its modal (2026-07-12)
+
+Two more from the same feedback thread as v25, both concrete "here's exactly what I want" requests
+rather than bug reports.
+
+**"Show escalation template" — preview before saving.** The escalation template card on
+`agent/case.html` (`renderTemplateCard()`) only ever rendered off `currentCase` — the *saved* case
+row — so it stayed hidden until an agent had already hit Save on the escalation, even though every
+value it needs (reason, service centre, and the case's own account/task/work-order fields) is
+sitting right there in the form the moment they've picked a reason. Refactored the fetch+render
+into a shared `loadTemplateForReason(reasonId)`, used by both the existing auto-render-on-load path
+(for an already-escalated case) and a new **"👀 Show escalation template"** button next to Timer/
+Callback, which reads the *live, unsaved* reason dropdown. Also switched the recipients line and
+the depot-copy header to look up the *currently selected* service centre (`serviceCentres.find(...)`
+from an expanded `loadLookups()` query that now also pulls `depot_email`/`cc_contacts`) instead of
+`currentCase.service_centres`, so changing the centre dropdown updates the preview live, pre-save,
+same as the reason. Nothing about this writes to the database — verified via a synthetic click-test
+that clicking the preview button after picking a reason/centre populates the card correctly with
+**zero** `cases` table writes. Combines naturally with v25's "Create and escalate case": land on the
+pre-filled escalation form, hit "Show escalation template" to sanity-check the wording, *then* Save.
+
+**Notepad drops its "+ New note" modal for an always-visible box.** User pointed at the case-detail
+page's Notes section (a plain textarea + Save button, always on the page, no modal — the same
+pattern this project has used for case notes since early on) and asked for the Templates page's
+personal Notepad to work the same way, instead of needing a "+ New note" click to reveal a popup.
+Removed `note-modal-backdrop` entirely; the note form (text + customer name/business/phone/email/
+account/task fields, same as before) now lives directly in the Notepad card, always visible. "Edit"
+on an existing note loads it back into that same box (scrolled into view, textarea focused, Save
+button relabels to "Update note", a "Cancel edit" link appears) rather than opening a modal over it.
+Functionally this is the same insert/update logic verified working in v22 and v24 — this update is
+UI-only, but re-verified end-to-end with a click-test regardless (fill → Save → correct `quick_notes`
+insert payload, zero modal element in the DOM at all).

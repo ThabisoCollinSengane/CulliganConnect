@@ -81,12 +81,17 @@
                 <option value="Not required">Not required</option>
               </select>
             </div>
+            <div>
+              <label style="margin-top:0;">&nbsp;</label>
+              <button type="button" class="btn secondary" id="preview-template-btn" style="white-space:nowrap;">👀 Show escalation template</button>
+            </div>
           </div>
           <button class="btn" id="save-status-btn">Save</button>
           <button class="btn" id="close-case-btn" style="background:var(--green);">✅ Close case</button>
           <button class="btn secondary hidden" id="assign-me-btn">🙋 Assign to me</button>
         </div>
         <p class="hint" id="close-hint" style="margin-top:8px;">Closing an escalated case ends its SLA timer and counts toward your daily target.</p>
+        <p class="hint hidden" id="template-preview-hint" style="margin-top:8px;"></p>
         <p class="success-text hidden" id="status-success"></p>
         <p class="error-text hidden" id="status-error"></p>
         <div class="hidden" id="closed-banner" style="margin-top:12px; background:var(--light-blue); border-left:4px solid var(--green); border-radius:6px; padding:10px 14px;">
@@ -229,13 +234,16 @@
       signOut();
     });
 
+    let serviceCentres = [];
+
     async function loadLookups() {
       const [{ data: reasons }, { data: centres }, { data: colleagues }] = await Promise.all([
         supabase.from('escalation_reasons').select('id, name').eq('is_active', true).order('name'),
-        supabase.from('service_centres').select('id, code, name').eq('is_active', true).order('name'),
+        supabase.from('service_centres').select('id, code, name, depot_email, cc_contacts').eq('is_active', true).order('name'),
         supabase.from('profiles').select('id, full_name').eq('is_active', true).order('full_name'),
       ]);
 
+      serviceCentres = centres || [];
       document.getElementById('escalation-reason').innerHTML =
         (reasons || []).map(r => `<option value="${r.id}">${r.name}</option>`).join('');
       document.getElementById('service-centre').innerHTML =
@@ -420,20 +428,33 @@
     });
 
     async function renderTemplateCard() {
-      const templateCard = document.getElementById('template-card');
       if (currentCase.status !== 'escalated' || !currentCase.escalation_reason_id) {
-        templateCard.classList.add('hidden');
+        document.getElementById('template-card').classList.add('hidden');
         return;
       }
+      await loadTemplateForReason(currentCase.escalation_reason_id);
+    }
+
+    // Shared by the auto-render-on-load path (already-saved escalated case)
+    // and the "Show escalation template" button (previewing before saving) —
+    // same fetch, same render, just a different source for the reason id.
+    async function loadTemplateForReason(reasonId, { silent = false } = {}) {
+      const templateCard = document.getElementById('template-card');
+      const hint = document.getElementById('template-preview-hint');
+      hint?.classList.add('hidden');
 
       const { data } = await supabase
         .from('escalation_templates')
         .select('*')
-        .eq('escalation_reason_id', currentCase.escalation_reason_id)
+        .eq('escalation_reason_id', reasonId)
         .maybeSingle();
 
       if (!data) {
         templateCard.classList.add('hidden');
+        if (!silent && hint) {
+          hint.textContent = 'No template configured for this reason yet — ask your admin.';
+          hint.classList.remove('hidden');
+        }
         return;
       }
 
@@ -442,16 +463,30 @@
       renderTemplatePreviews();
     }
 
+    document.getElementById('preview-template-btn').addEventListener('click', () => {
+      const reasonId = document.getElementById('escalation-reason').value;
+      const hint = document.getElementById('template-preview-hint');
+      if (!reasonId) {
+        hint.textContent = 'Select an escalation reason above first.';
+        hint.classList.remove('hidden');
+        return;
+      }
+      loadTemplateForReason(reasonId);
+      document.getElementById('template-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
     // Both templates render side by side, always from the same source — one
     // professional standard, no freestyling. Step 2 re-renders as the update is typed.
+    // Reads the *live* service-centre selection (not just the saved case), so
+    // this works whether or not the escalation has actually been saved yet.
     function renderTemplatePreviews() {
       if (!escalationTemplate) return;
       const update = document.getElementById('depot-update').value.trim();
-      const centre = currentCase.service_centres;
+      const centre = serviceCentres.find(c => c.id === document.getElementById('service-centre').value) || null;
 
       document.getElementById('depot-recipients').textContent = centre
         ? `To: ${centre.depot_email}${centre.cc_contacts ? ` · Cc: ${centre.cc_contacts}` : ''}`
-        : '⚠ No service centre selected — pick one above and save first.';
+        : '⚠ No service centre selected — pick one above.';
       document.getElementById('depot-subject-preview').textContent =
         fillTemplate(escalationTemplate.depot_subject, tokenValues());
       document.getElementById('depot-body-preview').textContent =
@@ -461,6 +496,8 @@
       document.getElementById('customer-body-preview').textContent =
         fillTemplate(escalationTemplate.customer_body, tokenValues(update));
     }
+
+    document.getElementById('service-centre').addEventListener('change', renderTemplatePreviews);
 
     document.getElementById('depot-update').addEventListener('input', renderTemplatePreviews);
 
@@ -485,7 +522,7 @@
       if (!escalationTemplate) return;
       const body = fillTemplate(escalationTemplate.depot_subject, tokenValues()) + '\n\n' +
         fillTemplate(escalationTemplate.depot_body, tokenValues());
-      const centre = currentCase.service_centres;
+      const centre = serviceCentres.find(c => c.id === document.getElementById('service-centre').value) || null;
       const header = centre ? `To: ${centre.depot_email}${centre.cc_contacts ? `\nCc: ${centre.cc_contacts}` : ''}\n\n` : '';
       const ok = await copyToClipboard(header + body);
       showCopySuccess(ok);
