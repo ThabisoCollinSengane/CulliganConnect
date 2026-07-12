@@ -1197,3 +1197,31 @@ Fixed in `agent/case.html`:
 
 No schema or backend change — `closed_at`/`closed_by` already existed and were already correct;
 this is purely making the existing correct state legible to the user.
+
+---
+
+📉 v20 Update – Collective team trends (2026-07-12)
+
+User picked one item from the prior recommendation list ("only #4 — time-to-close trend") and
+scoped follow-ups to collective/company-wide stats only, explicitly ruling out per-agent-oriented
+extras (notifications, bulk-close, admin list columns).
+
+· **"📈 Team trends" card** (`admin/reports.html`, above the existing per-agent report — collective
+  view is now the headline, per-agent ranking is secondary): three weekly bar charts over the last
+  8 Monday-start weeks, company-wide, deliberately NOT filtered by the report's date-range/
+  department controls below it:
+  - **⏱ Avg. time to close** — mean `closed_at - created_at` hours per week, reusing
+    `formatDuration()` from the resolution-time work in v18.
+  - **✅ Cases closed** — weekly volume.
+  - **🚨 Escalations breaching SLA** — % of that week's *closed* escalations where
+    `escalation_audit.was_overdue = true`. This is a materially better metric than the existing
+    per-agent report's SLA-breach count (which is a live snapshot of currently-open overdue
+    cases) — `escalation_audit` already captured a historical, closeable "was this one ever
+    overdue" fact per escalation, so it buckets cleanly by week. No schema change needed.
+  - A plain-language **direction line** above the charts (📉 improving / 📈 slower / ↔ steady)
+    comparing the last 2 weeks' avg time-to-close against the 2 weeks before that.
+· Charts are plain HTML/CSS bars (flex columns, height % of the week's max), consistent with the
+  project's established zero-dependency style (same pattern as the mood-insights bars) — no
+  charting library added.
+· Two queries total (`cases` + `escalation_audit`, both `gte(closed_at, weekStart[0])`), bucketed
+  client-side by week — not 8 separate per-week queries.
