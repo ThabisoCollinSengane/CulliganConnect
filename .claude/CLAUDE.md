@@ -1441,3 +1441,38 @@ browser to check in with the server on every load before trusting a cached copy 
 today is live for every user's next page load, not whenever their local cache happens to expire.
 This is the first deploy-config change made in the project; previously the site relied entirely on
 Vercel's platform defaults for static-file caching.
+
+---
+
+🚑 v25 Update – no-store, and "create and escalate case" (2026-07-12)
+
+Same day, immediate follow-up: user reported still seeing the old "Create case" button label after
+v24 merged. That text doesn't exist anywhere in the current codebase (renamed to "Submit case" in
+v23) — confirming a device was still serving a cached copy from *before* even the `no-cache` header
+existed. `no-cache` only forces revalidation of entries the browser already knows might be stale;
+an entry cached under the browser's own heuristic freshness estimate (the situation for every asset
+on this site before v24) can be reused without ever asking the server again, regardless of what
+headers a fresh request would now receive. Upgraded to **`Cache-Control: no-store`** — nothing gets
+cached at all, so there's nothing to heuristically consider fresh and nothing to (not) revalidate.
+Fully closes the gap going forward; a device with an already-stale cached copy still needs one
+manual cache clear (or an incognito tab) to see it, since no server-side header can retroactively
+invalidate what's already sitting on a device.
+
+**"Create and escalate case"** — user clarified (via a quick multiple-choice check, since the two
+readings implied meaningfully different work) that they wanted the full "Case submission" form's
+submit button, on success, to land the agent straight on the new case's escalation form — not to
+silently auto-escalate with guessed defaults (which would've required picking a reason/timer/service
+centre with no UI to ask for them). Implemented as:
+· `agent/cases.html`: submit button renamed "Create and escalate case"; on success, `insert(...)
+  .select('id').single()` gets the new row back and redirects to
+  `/agent/case.html?id=<id>&action=escalate` instead of closing the modal and staying on the list.
+· `agent/case.html`: new `maybePrefillEscalation()`, called after `renderStatusForm()` in
+  `loadCase()`. Reads `?action=escalate` — if present and the case isn't already escalated/closed,
+  sets the status `<select>` to `escalated` and reveals the escalation fields **without saving
+  anything** (same as clicking "Escalated" in the dropdown; the trigger-driven `escalated_at`/
+  `escalated_by`/`escalation_audit` insert still only happens once the agent hits Save on that
+  page, exactly as for any other escalation). Purely a form pre-fill, so it's safe to land on
+  repeatedly and never risks half-escalating a case nobody actually confirmed.
+Quick Case submission (v23) is unchanged — that flow remains create+close-in-one-click for cases
+already resolved in Salesforce; this is the opposite case (needs escalation), handled by getting
+the agent to the right screen faster rather than skipping the screen.
