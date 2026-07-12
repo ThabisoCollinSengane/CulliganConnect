@@ -1118,3 +1118,13 @@ security-definer functions: always `revoke execute from public, anon, authentica
 Note on workflow: this is deliberately paste-based (not a Salesforce API integration) — the user
 works from copied screens; agents still close on both Salesforce and CulliganConnect. No email is
 sent from the app; templates remain copy-to-clipboard by design.
+
+Addendum (v16.1): tuned the importer to the user's real Salesforce columns — Case Number,
+Account Name, Subject, Status, Date/Time Opened, Case Type. Auto-detection now maps Case Number →
+`cases.external_case_number` (new column), Account Name → customer_name, Subject → note, Case Type
+→ routing. Added a distribution mode **"By case type → its department (auto)"**: each case's
+Salesforce case type (water ordering / service request / account update / tech support) routes to a
+matching department (seeded in `20260711210000_salesforce_import_routing.sql`) and round-robins
+among that department's agents; unknown types or empty departments fall back to all agents. Case
+type is also matched to our `case_types` (first-word match) for `case_type_id`. Salesforce case #
+now shows on the case detail page. Verified insert live (rolled back).

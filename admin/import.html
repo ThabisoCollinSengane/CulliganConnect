@@ -37,7 +37,7 @@
     <main class="main">
       <div class="card">
         <h2 style="margin:0 0 4px;">Import &amp; assign cases</h2>
-        <p class="hint">In Salesforce, click into the case list, press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy every row, then paste below. CulliganConnect reads the columns and shares the cases out to your agents however you choose.</p>
+        <p class="hint">In Salesforce, click into the case list, press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy every row, then paste below. CulliganConnect reads the columns — Case Number, Account Name, Subject, Status, Date/Time Opened, Case Type — and shares the cases out to your agents. Pick <strong>“By case type”</strong> to auto-route each case to its department (Water Ordering, Service Request, Account Update, Tech Support).</p>
         <textarea id="paste-box" rows="8" placeholder="Paste the copied Salesforce cases here…" style="font-family: ui-monospace, monospace; font-size:0.82rem;"></textarea>
         <div style="display:flex; gap:16px; align-items:center; margin-top:10px; flex-wrap:wrap;">
           <label style="margin:0; display:flex; align-items:center; gap:6px;">
@@ -63,9 +63,10 @@
         <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;">
           <div>
             <label style="margin-top:0;">Share cases out…</label>
-            <select id="mode" style="width:260px;">
+            <select id="mode" style="width:300px;">
+              <option value="casetype">By case type → its department (auto)</option>
               <option value="agent">By agent (round-robin)</option>
-              <option value="department">By department</option>
+              <option value="department">By one department</option>
               <option value="team">By team</option>
               <option value="target">By target gap (catch-up — laggers get more)</option>
             </select>
@@ -103,33 +104,53 @@
 
     const FIELDS = [
       ['', 'Ignore'],
+      ['external_case_number', 'Case number (Salesforce)'],
+      ['customer_name', 'Account / customer name'],
+      ['case_type', 'Case type → routes to department'],
       ['account_number', 'Account number'],
       ['task_number', 'Task number'],
       ['work_order_number', 'Work order number'],
-      ['customer_name', 'Customer name'],
       ['customer_phone', 'Customer phone'],
       ['customer_email', 'Customer email'],
-      ['sla_date', 'SLA date'],
+      ['sla_date', 'SLA / opened date'],
       ['quantity', 'Quantity'],
       ['case_notes', 'Subject / description (as a note)'],
     ];
-    // Header keyword → field, for auto-guessing the mapping.
+    // Header keyword → field, for auto-guessing the mapping. Order matters:
+    // more specific patterns first so "Case Number" ≠ "Case Type" ≠ "Account Name".
     const GUESS = [
-      [/account/i, 'account_number'],
-      [/task/i, 'task_number'],
+      [/case\s*(number|no|#)/i, 'external_case_number'],
+      [/case\s*type|^type$/i, 'case_type'],
+      [/account\s*name|^account$/i, 'customer_name'],
+      [/subject|description|summary/i, 'case_notes'],
       [/work.?order|^wo\b/i, 'work_order_number'],
-      [/customer.*name|account name|name/i, 'customer_name'],
+      [/account\s*number|acct/i, 'account_number'],
+      [/task/i, 'task_number'],
       [/phone|mobile|tel/i, 'customer_phone'],
       [/email|e-?mail/i, 'customer_email'],
-      [/sla|due/i, 'sla_date'],
+      [/opened|date\/time|sla|due/i, 'sla_date'],
       [/qty|quantit|units/i, 'quantity'],
-      [/subject|description|reason|summary|case/i, 'case_notes'],
+      [/customer.*name|^name$/i, 'customer_name'],
     ];
+
+    // Salesforce case-type text → routing department name. Matched by keyword.
+    const CASE_TYPE_DEPT = [
+      [/water|order/i, 'water ordering'],
+      [/service/i, 'service request'],
+      [/account/i, 'account update'],
+      [/tech|support|technical/i, 'tech support'],
+    ];
+    function deptNameForCaseType(value) {
+      for (const [re, dept] of CASE_TYPE_DEPT) if (re.test(value)) return dept;
+      return null;
+    }
 
     let profile = null;
     let parsed = { header: [], rows: [] };
     let agents = [];       // {id, full_name, department_id, team_id}
     let dailyTarget = 30;
+    let deptByName = {};    // lowercased department name → id
+    let caseTypes = [];     // {id, name}
 
     // ---- Parse ----
     function splitDelimited(line) {
@@ -205,10 +226,19 @@
           if (val === undefined || val === '') continue;
           if (field === 'quantity') { const n = parseInt(val, 10); if (Number.isFinite(n)) c.quantity = n; }
           else if (field === 'sla_date') { const d = new Date(val); if (!isNaN(d)) c.sla_date = d.toISOString().slice(0, 10); }
+          else if (field === 'case_type') {
+            // Route by case type: resolve the matching department + our case type.
+            const deptName = deptNameForCaseType(val);
+            c._departmentId = deptName ? (deptByName[deptName] || null) : null;
+            const firstWord = val.trim().split(/\s+/)[0].toLowerCase();
+            const ct = caseTypes.find(t => t.name.toLowerCase().startsWith(firstWord));
+            if (ct) c.case_type_id = ct.id;
+            c._caseTypeLabel = val;
+          }
           else c[field] = val;
         }
         return c;
-      }).filter(c => Object.keys(c).length > 0);
+      }).filter(c => Object.keys(c).some(k => !k.startsWith('_')));
     }
 
     // ---- Distribution ----
@@ -247,9 +277,25 @@
       return out;
     }
 
-    async function computeAssignment(n) {
+    async function computeAssignment(cases) {
+      const n = cases.length;
       const mode = document.getElementById('mode').value;
       let pool = agents;
+
+      if (mode === 'casetype') {
+        // Each case goes to an agent in its case-type's department; round-robin per department.
+        if (!agents.length) throw new Error('No active agents available.');
+        const counters = {};
+        return cases.map(c => {
+          let deptPool = c._departmentId ? agents.filter(a => a.department_id === c._departmentId) : [];
+          const key = deptPool.length ? c._departmentId : '_all';
+          if (!deptPool.length) deptPool = agents; // unknown type or empty dept → everyone
+          counters[key] = counters[key] || 0;
+          const id = deptPool[counters[key] % deptPool.length].id;
+          counters[key]++;
+          return id;
+        });
+      }
 
       if (mode === 'agent') {
         const picked = [...document.getElementById('agent-picker').selectedOptions].map(o => o.value);
@@ -285,7 +331,7 @@
       const cases = buildCases();
       if (!cases.length) { errorEl.textContent = 'No cases parsed — check the column mapping.'; errorEl.classList.remove('hidden'); return; }
       try {
-        const assignment = await computeAssignment(cases.length);
+        const assignment = await computeAssignment(cases);
         const counts = {};
         assignment.forEach(id => { counts[id] = (counts[id] || 0) + 1; });
         const rows = Object.entries(counts).sort((a, b) => b[1] - a[1])
@@ -311,17 +357,22 @@
       const btn = document.getElementById('import-btn');
       btn.disabled = true; btn.textContent = 'Importing…';
       try {
-        const assignment = await computeAssignment(cases.length);
+        const assignment = await computeAssignment(cases);
         const notes = [];
         const payload = cases.map((c, i) => {
           const assignedTo = assignment[i];
           const agent = agents.find(a => a.id === assignedTo);
-          const { case_notes, ...caseFields } = c;
-          if (case_notes) notes.push({ idx: i, text: case_notes });
+          // Drop the note text and any internal _-prefixed helper keys.
+          const caseFields = {};
+          for (const [k, v] of Object.entries(c)) {
+            if (k === 'case_notes' || k.startsWith('_')) continue;
+            caseFields[k] = v;
+          }
+          if (c.case_notes) notes.push({ idx: i, text: c.case_notes });
           return {
             ...caseFields,
             assigned_to: assignedTo,
-            department_id: agent?.department_id || null,
+            department_id: c._departmentId || agent?.department_id || null,
             status: 'new',
             source: 'salesforce_import',
           };
@@ -354,12 +405,14 @@
     });
 
     // ---- Mode controls ----
-    document.getElementById('mode').addEventListener('change', (e) => {
-      const m = e.target.value;
+    function syncModeControls() {
+      const m = document.getElementById('mode').value;
       document.getElementById('agent-picker-wrap').classList.toggle('hidden', m !== 'agent');
       document.getElementById('dept-picker-wrap').classList.toggle('hidden', m !== 'department');
       document.getElementById('team-picker-wrap').classList.toggle('hidden', m !== 'team');
-    });
+    }
+    document.getElementById('mode').addEventListener('change', syncModeControls);
+    syncModeControls();
 
     document.getElementById('logout-link').addEventListener('click', (e) => { e.preventDefault(); signOut(); });
 
@@ -367,13 +420,16 @@
     profile = await requireRole(['admin']);
     if (profile) {
       subscribeToNotifications(profile.id);
-      const [{ data: agentData }, { data: depts }, { data: teams }, { data: settings }] = await Promise.all([
+      const [{ data: agentData }, { data: depts }, { data: teams }, { data: cts }, { data: settings }] = await Promise.all([
         supabase.from('profiles').select('id, full_name, department_id, team_id').eq('role', 'agent').eq('is_active', true).order('full_name'),
         supabase.from('departments').select('id, name').eq('is_active', true).order('name'),
         supabase.from('teams').select('id, name').eq('is_active', true).order('name'),
+        supabase.from('case_types').select('id, name').eq('is_active', true).order('name'),
         supabase.from('org_settings').select('daily_target').eq('id', true).maybeSingle(),
       ]);
       agents = agentData || [];
+      caseTypes = cts || [];
+      deptByName = Object.fromEntries((depts || []).map(d => [d.name.toLowerCase(), d.id]));
       dailyTarget = settings?.daily_target || 30;
       document.getElementById('agent-picker').innerHTML = agents.map(a => `<option value="${a.id}">${a.full_name}</option>`).join('');
       document.getElementById('dept-picker').innerHTML = (depts || []).map(d => `<option value="${d.id}">${d.name}</option>`).join('');
