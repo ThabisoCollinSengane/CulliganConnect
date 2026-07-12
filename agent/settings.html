@@ -35,20 +35,34 @@
           <div class="stat-tile"><div class="value" id="stat-month-closed">–</div><div class="label">Closed this month</div></div>
           <div class="stat-tile"><div class="value" id="stat-week-calls">–</div><div class="label">Calls this week</div></div>
           <div class="stat-tile"><div class="value" id="stat-month-escalated">–</div><div class="label">Escalated this month</div></div>
+          <div class="stat-tile"><div class="value" id="stat-streak">–</div><div class="label">🔥 Current streak</div></div>
         </div>
       </div>
 
       <div class="card">
-        <h3 style="margin:0 0 8px;">Badges</h3>
+        <h3 style="margin:0 0 8px;">🏅 Achievements</h3>
+        <p class="hint" style="margin:0 0 10px;">Persisted and visible to the whole team — collect them all.</p>
         <div id="badges-list" style="display:flex; gap:10px; flex-wrap:wrap;"></div>
       </div>
 
       <div class="card">
         <div class="toolbar">
-          <h3 style="margin:0;">🏆 Team leaderboard (this month)</h3>
+          <h3 style="margin:0;">🏆 Agent leaderboard (this month)</h3>
         </div>
+        <p class="hint" style="margin:0 0 10px;">Weighted score factors in escalation quality — breaching SLA on escalations you closed lowers your score, so rushing doesn't pay.</p>
         <table id="leaderboard-table">
           <thead><tr><th>#</th><th>Agent</th><th>Weighted score</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">🏁 Team leaderboard (this month)</h3>
+        </div>
+        <p class="hint" style="margin:0 0 10px;">Every active team's combined score.</p>
+        <table id="team-leaderboard-table">
+          <thead><tr><th>#</th><th>Team</th><th>Score</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -103,11 +117,51 @@
     import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
     import { subscribeToNotifications } from '/js/notifications.js';
+    import { weightedScore, fetchEscalationStats, computeStreak, checkAndAwardBadges, computeTeamLeaderboard } from '/js/gamification.js';
 
     const profile = await requireRole(['agent', 'admin']);
+    let dailyTarget = 30;
     if (profile) {
       subscribeToNotifications(profile.id);
-      await Promise.all([loadStats(), loadLeaderboard(), loadTargets()]);
+      const { data: settings } = await supabase.from('org_settings').select('daily_target').eq('id', true).maybeSingle();
+      dailyTarget = settings?.daily_target || 30;
+      await Promise.all([loadStats(), loadStreakAndBadges(), loadLeaderboard(), loadTeamLeaderboard(), loadTargets()]);
+    }
+
+    async function loadStreakAndBadges() {
+      const { streak } = await computeStreak(profile.id, dailyTarget);
+      document.getElementById('stat-streak').textContent = streak > 0 ? `${streak} day${streak === 1 ? '' : 's'}` : '—';
+      await checkAndAwardBadges(profile.id, { streak });
+      await renderBadges();
+    }
+
+    async function renderBadges() {
+      const { data } = await supabase.from('badges').select('badge_key, label, earned_at')
+        .eq('agent_id', profile.id).order('earned_at', { ascending: false });
+      const list = document.getElementById('badges-list');
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">Keep going — your first badge is closer than you think.</p>';
+        return;
+      }
+      list.innerHTML = data.map(b =>
+        `<span class="badge blue" title="Earned ${new Date(b.earned_at).toLocaleDateString()}">${b.label}</span>`
+      ).join('');
+    }
+
+    async function loadTeamLeaderboard() {
+      const rows = await computeTeamLeaderboard();
+      const tbody = document.querySelector('#team-leaderboard-table tbody');
+      tbody.innerHTML = '';
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="hint">No teams set up yet — ask your admin.</td></tr>';
+        return;
+      }
+      rows.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        if (r.team.id === profile.team_id) tr.style.background = 'var(--light-blue)';
+        tr.innerHTML = `<td>${i + 1}${i === 0 ? ' 🏆' : ''}</td><td>${r.team.name}${r.team.id === profile.team_id ? ' (your team)' : ''}</td><td>${r.score}</td>`;
+        tbody.appendChild(tr);
+      });
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
@@ -175,23 +229,6 @@
       document.getElementById('stat-month-closed').textContent = monthClosed;
       document.getElementById('stat-week-calls').textContent = weekCalls;
       document.getElementById('stat-month-escalated').textContent = monthEscalated;
-
-      renderBadges({ weekClosed, monthClosed, weekCalls });
-    }
-
-    function renderBadges({ weekClosed, monthClosed, weekCalls }) {
-      const badges = [];
-      if (monthClosed >= 1) badges.push('🚀 First close of the month');
-      if (monthClosed >= 10) badges.push('⭐ 10 closed this month');
-      if (monthClosed >= 50) badges.push('🏅 50 closed this month');
-      if (monthClosed >= 100) badges.push('👑 Century club');
-      if (weekClosed >= 5) badges.push('🔥 On a roll this week');
-      if (weekCalls >= 50) badges.push('📞 Call champion this week');
-
-      const list = document.getElementById('badges-list');
-      list.innerHTML = badges.length
-        ? badges.map(b => `<span class="badge blue">${b}</span>`).join('')
-        : '<p class="hint">Keep going — your first badge is closer than you think.</p>';
     }
 
     async function loadLeaderboard() {
@@ -199,11 +236,12 @@
       const { data: agentList } = await supabase.from('profiles').select('id, full_name').eq('role', 'agent').eq('is_active', true);
 
       const rows = await Promise.all((agentList || []).map(async (a) => {
-        const [closed, interacted] = await Promise.all([
+        const [closed, interacted, { escClosed, escBreached }] = await Promise.all([
           metricValue('cases_closed', a.id, monthStart, new Date()),
           metricValue('cases_interacted', a.id, monthStart, new Date()),
+          fetchEscalationStats(a.id, monthStart.toISOString(), new Date().toISOString()),
         ]);
-        return { agent: a, weighted: closed * 2 + interacted };
+        return { agent: a, weighted: weightedScore({ closed, interacted, escClosed, escBreached }) };
       }));
 
       rows.sort((a, b) => b.weighted - a.weighted);

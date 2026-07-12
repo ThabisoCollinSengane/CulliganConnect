@@ -52,8 +52,11 @@
             <text id="meter-count" x="80" y="102" text-anchor="middle" font-size="13" fill="var(--text-muted)">0 / 30</text>
           </svg>
           <div style="flex:1; min-width:200px;">
-            <h3 style="margin:0 0 6px;">🎯 Daily target</h3>
-            <p class="hint" style="margin:0;">Closed cases + calls taken today, filling toward the team-wide daily target set by your admin.</p>
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <h3 style="margin:0;">🎯 Daily target</h3>
+              <span class="badge orange hidden" id="streak-pill"></span>
+            </div>
+            <p class="hint" style="margin:6px 0 0;">Closed cases + calls taken today, filling toward the team-wide daily target set by your admin.</p>
             <p id="meter-message" style="margin:10px 0 0; font-weight:600; color:var(--accent-blue);"></p>
           </div>
         </div>
@@ -100,6 +103,14 @@
 
       <div class="card">
         <div class="toolbar">
+          <h3 style="margin:0;">⚡ Team activity</h3>
+        </div>
+        <p class="hint" style="margin:0 0 8px;">Live — every close and badge across the team, as it happens.</p>
+        <div id="activity-feed-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
           <h3 style="margin:0;">Notifications</h3>
         </div>
         <div id="notifications-list"></div>
@@ -122,6 +133,8 @@
     import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
     import { timeGreeting, motivationalLine } from '/js/greeting.js';
     import { subscribeToNotifications } from '/js/notifications.js';
+    import { weightedScore, fetchEscalationStats, computeStreak, checkAndAwardBadges } from '/js/gamification.js';
+    import { loadRecentActivity, formatActivity, subscribeToActivityFeed } from '/js/activityFeed.js';
 
     const profile = await requireRole(['agent', 'admin']);
 
@@ -146,7 +159,45 @@
         loadCallsToday(),
         loadMiniLeaderboard(),
         loadDueReminders(),
+        loadStreakAndBadges(),
+        loadActivityFeed(),
       ]);
+    }
+
+    async function loadStreakAndBadges() {
+      const { streak, metToday } = await computeStreak(profile.id, dailyTarget);
+      const pill = document.getElementById('streak-pill');
+      if (streak > 0) {
+        pill.textContent = `🔥 ${streak}-day streak${metToday ? '' : ' — keep it alive today!'}`;
+        pill.classList.remove('hidden');
+      } else {
+        pill.classList.add('hidden');
+      }
+
+      const newBadges = await checkAndAwardBadges(profile.id, { streak });
+      if (newBadges.length) showBadgeToast(newBadges);
+    }
+
+    function showBadgeToast(badges) {
+      const toast = document.createElement('div');
+      toast.style.cssText = 'position:fixed; bottom:20px; right:20px; z-index:100; background:var(--white); box-shadow:var(--shadow); border-left:4px solid var(--orange); border-radius:8px; padding:14px 18px; max-width:320px;';
+      toast.innerHTML = `<strong>🎉 New badge${badges.length > 1 ? 's' : ''} unlocked!</strong>` +
+        badges.map(b => `<div style="margin-top:4px;">${b.label}</div>`).join('');
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 6000);
+    }
+
+    async function renderActivityFeed() {
+      const rows = await loadRecentActivity();
+      const list = document.getElementById('activity-feed-list');
+      list.innerHTML = rows.length
+        ? rows.map(r => `<div class="hint" style="padding:6px 0; border-bottom:1px solid var(--border);">${formatActivity(r)} <span style="float:right;">${new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>`).join('')
+        : '<p class="hint">Nothing yet today — first close of the day gets the feed going.</p>';
+    }
+
+    async function loadActivityFeed() {
+      await renderActivityFeed();
+      subscribeToActivityFeed(renderActivityFeed);
     }
 
     async function loadDueReminders() {
@@ -314,14 +365,15 @@
       const { data: agentList } = await supabase.from('profiles').select('id, full_name').eq('role', 'agent').eq('is_active', true);
 
       const rows = await Promise.all((agentList || []).map(async (a) => {
-        const [{ count: closed }, { data: notes }] = await Promise.all([
+        const [{ count: closed }, { data: notes }, { escClosed, escBreached }] = await Promise.all([
           supabase.from('cases').select('id', { count: 'exact', head: true })
             .eq('closed_by', a.id).gte('closed_at', monthStart.toISOString()),
           supabase.from('case_notes').select('case_id')
             .eq('user_id', a.id).gte('created_at', monthStart.toISOString()),
+          fetchEscalationStats(a.id, monthStart.toISOString(), new Date().toISOString()),
         ]);
         const interacted = new Set((notes || []).map(n => n.case_id)).size;
-        return { agent: a, weighted: (closed || 0) * 2 + interacted };
+        return { agent: a, weighted: weightedScore({ closed: closed || 0, interacted, escClosed, escBreached }) };
       }));
 
       rows.sort((a, b) => b.weighted - a.weighted);

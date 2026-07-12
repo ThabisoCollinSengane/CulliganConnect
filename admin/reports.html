@@ -81,7 +81,7 @@
             <select id="rank-by" style="width:200px;">
               <option value="closed">Cases closed</option>
               <option value="interacted">Cases interacted</option>
-              <option value="weighted" selected>Weighted score (closed×2 + interacted×1)</option>
+              <option value="weighted" selected>Weighted score (closed×2 + interacted, escalation-quality adjusted)</option>
             </select>
           </div>
           <button class="btn" id="run-btn">Run</button>
@@ -122,6 +122,7 @@
     import { requireRole, signOut } from '/js/auth.js';
     import { copyToClipboard } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
+    import { weightedScore, fetchEscalationStats } from '/js/gamification.js';
 
     const profile = await requireRole(['admin']);
     let lastResults = null;
@@ -287,7 +288,7 @@
       const today = new Date().toISOString().slice(0, 10);
 
       const rows = await Promise.all((agentList || []).map(async (agent) => {
-        const [{ data: closedCases }, { data: notes }, { count: escalated }, { count: slaBreaches }, { data: calls }] = await Promise.all([
+        const [{ data: closedCases }, { data: notes }, { count: escalated }, { count: slaBreaches }, { data: calls }, escStats] = await Promise.all([
           supabase.from('cases').select('id, created_at, closed_at')
             .eq('closed_by', agent.id).gte('closed_at', from.toISOString()).lte('closed_at', to.toISOString()),
           supabase.from('case_notes').select('case_id')
@@ -298,6 +299,7 @@
             .eq('assigned_to', agent.id).lt('sla_date', today).is('closed_at', null),
           supabase.from('call_logs').select('calls_taken')
             .eq('agent_id', agent.id).gte('call_date', from.toISOString().slice(0, 10)).lte('call_date', to.toISOString().slice(0, 10)),
+          fetchEscalationStats(agent.id, from.toISOString(), to.toISOString()),
         ]);
 
         const interacted = new Set((notes || []).map(n => n.case_id)).size;
@@ -319,7 +321,7 @@
           callsTaken,
           escalated: escalated || 0,
           slaBreaches: slaBreaches || 0,
-          weighted: closedCount * 2 + interacted,
+          weighted: weightedScore({ closed: closedCount, interacted, escClosed: escStats.escClosed, escBreached: escStats.escBreached }),
           resolutionHours,
           avgResolutionHours,
         };
