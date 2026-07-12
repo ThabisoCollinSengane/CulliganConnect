@@ -30,7 +30,10 @@
       <div class="card">
         <div class="toolbar">
           <h2 style="margin:0;">Cases</h2>
-          <button class="btn" id="new-case-btn">+ New case</button>
+          <div style="display:flex; gap:8px;">
+            <button class="btn secondary" id="quick-case-btn">+ Quick case</button>
+            <button class="btn" id="new-case-btn">+ New case</button>
+          </div>
         </div>
         <p class="hint" style="margin-top:-8px;">Tip: press <kbd>n</kbd> for a new case, <kbd>/</kbd> to search. Escalated cases can be actioned and closed by anyone on the team.</p>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
@@ -64,6 +67,11 @@
       <h3>New case</h3>
       <form id="new-case-form">
         <div class="form-row">
+          <label>Case number</label>
+          <input id="nc-case-number" />
+          <p class="hint">Leave blank to auto-generate. Fill it in if this case already has a number from another system (e.g. Salesforce).</p>
+        </div>
+        <div class="form-row">
           <label>Account number</label>
           <input id="nc-account" />
           <p class="hint" id="account-history-hint"></p>
@@ -91,6 +99,25 @@
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="nc-cancel">Cancel</button>
           <button type="submit" class="btn" id="nc-save">Create case</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="quick-modal-backdrop">
+    <div class="modal">
+      <h3>Quick case</h3>
+      <p class="hint" style="margin-top:-6px;">Just record it — case number and type only. Fill in the rest later from the case page.</p>
+      <form id="quick-case-form">
+        <div class="form-row"><label>Case number</label><input id="qc-case-number" required /></div>
+        <div class="form-row">
+          <label>Case type</label>
+          <select id="qc-case-type" required></select>
+        </div>
+        <p class="error-text hidden" id="qc-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="qc-cancel">Cancel</button>
+          <button type="submit" class="btn" id="qc-save">Create case</button>
         </div>
       </form>
     </div>
@@ -153,6 +180,13 @@
         caseTypes.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
       document.getElementById('nc-case-type').innerHTML =
         caseTypes.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+      document.getElementById('qc-case-type').innerHTML =
+        caseTypes.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+    }
+
+    function caseInsertErrorMessage(error) {
+      if (error.code === '23505') return 'A case with that case number already exists. Double-check the number, or leave it blank to auto-generate one.';
+      return error.message;
     }
 
     async function loadCases() {
@@ -250,6 +284,7 @@
       saveBtn.disabled = true;
 
       const { error } = await supabase.from('cases').insert({
+        case_number: document.getElementById('nc-case-number').value.trim() || null,
         account_number: document.getElementById('nc-account').value.trim() || null,
         task_number: document.getElementById('nc-task').value.trim() || null,
         work_order_number: document.getElementById('nc-workorder').value.trim() || null,
@@ -268,13 +303,46 @@
       saveBtn.disabled = false;
 
       if (error) {
-        errorEl.textContent = error.message;
+        errorEl.textContent = caseInsertErrorMessage(error);
         errorEl.classList.remove('hidden');
         return;
       }
 
       modal.classList.add('hidden');
       document.getElementById('new-case-form').reset();
+      await loadCases();
+    });
+
+    const quickModal = document.getElementById('quick-modal-backdrop');
+    document.getElementById('quick-case-btn').addEventListener('click', () => quickModal.classList.remove('hidden'));
+    document.getElementById('qc-cancel').addEventListener('click', () => quickModal.classList.add('hidden'));
+
+    document.getElementById('quick-case-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('qc-error');
+      errorEl.classList.add('hidden');
+      const saveBtn = document.getElementById('qc-save');
+      saveBtn.disabled = true;
+
+      const { error } = await supabase.from('cases').insert({
+        case_number: document.getElementById('qc-case-number').value.trim(),
+        case_type_id: document.getElementById('qc-case-type').value || null,
+        priority: 'normal',
+        assigned_to: profile.id,
+        status: 'new',
+        source: 'manual',
+      });
+
+      saveBtn.disabled = false;
+
+      if (error) {
+        errorEl.textContent = caseInsertErrorMessage(error);
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      quickModal.classList.add('hidden');
+      document.getElementById('quick-case-form').reset();
       await loadCases();
     });
   </script>

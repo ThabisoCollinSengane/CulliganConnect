@@ -1297,3 +1297,71 @@ weighted score by `profiles.team_id`, ranked by team. Requires the Teams feature
 to have teams populated — falls back to a friendly empty state ("No teams set up yet") otherwise.
 `profile.team_id` is now selected in `js/auth.js`'s shared profile fetch so every page has it
 available without a separate query.
+
+---
+
+🐛 v22 Update – Critical bug: My Day silently never finished loading, for everyone (2026-07-12)
+
+User report from real agents on the live site: calls logged on My Day never updated the counter,
+no confirmation of any kind, and nothing showed up on the admin dashboard's calls table either —
+"none of the call changes are showing, even on admin."
+
+**Root cause — found by reproducing the real page in a headless browser, not by guessing from
+code review.** Read-throughs of `agent/index.html`'s calls handler and RLS policies both looked
+completely correct, and a direct simulated-session SQL insert succeeded with no error — so the
+bug had to be client-side. Loaded the actual page with a mocked `supabase`/`auth` module in
+Playwright and watched for uncaught exceptions: `renderMoodPicker()` is *called* at the top of the
+page's init sequence, but the `const MOODS = [...]` array it reads is declared **~250 lines later
+in the same script** — a `ReferenceError: Cannot access 'MOODS' before initialization` (temporal
+dead zone). Because this is a top-level `<script type="module">`, that uncaught exception halts
+*all* subsequent top-level code in the file — every stat tile, the daily meter, the mini-leaderboard,
+the activity feed, notifications, and critically every `addEventListener` call further down the
+script, including "Update calls." The button was never broken — it simply never got wired up,
+on every single page load, for every agent, every time. Confirmed against real production API
+logs: `call_logs`, `org_settings`, and `notifications` requests were essentially absent across a
+real user's whole session, consistent with the page's init sequence never completing.
+
+Given how severe and silent this class of bug is (a script-halting exception with zero visible
+error to the user), swept the **entire app** for the same pattern — the same headless-browser
+technique, generalized into a scanner that loads every admin/agent page with mocked auth and
+watches for `pageerror`/unhandled-rejection events. Found two more, same root cause (a `let`/`const`
+declared after the function that uses it, where that function is invoked from an early
+`Promise.all`): `callsUpdatedAt` in `agent/index.html` (same page, second instance) and
+`myQuickNotes` in `agent/templates.html` — which is *why* "+ New note" on the Notepad card also did
+nothing: the same halt-the-whole-script failure, just triggered by a different variable. All three
+fixed by moving the declarations above their first use. Re-ran the scanner across all 13
+admin/agent pages after the fix — zero errors anywhere. Verified the actual click behavior (not
+just "no more crash") for both Update Calls and New Note against a real, RLS-simulated session for
+a real affected agent (Mbali Matusse) — both now correctly write to `call_logs` / `quick_notes`,
+confirmed via direct query, then cleaned up.
+
+Added a green success toast to "Update calls" (previously silent even when it *did* work), reusing
+the same toast pattern as the badge-unlocked toast.
+
+**Also fixed while in there:**
+· **Daily target now keeps counting past 100%.** The ring visually caps at a full circle (as it
+  must), but the percentage and count text were unintentionally reading the same capped value —
+  now they show the true, uncapped number (e.g. "134%", "40 / 30") once an agent beats target,
+  with an updated message ("X above target — keep going, it all counts!").
+· **Case number was missing from case creation entirely.** `cases.case_number` is `NOT NULL` with
+  a trigger (`generate_case_number()`) that only auto-generates when the column is left `null` on
+  insert — the New Case form simply never sent the field, so there was no way to record a case
+  under an existing external number (e.g. a Salesforce case number), which was the whole point of
+  logging it manually. Added a "Case number" field to New Case (blank = auto-generate, unchanged
+  default behavior); added a duplicate-case-number error message (`case_number` is `UNIQUE`) instead
+  of a raw Postgres error string.
+· **"+ Quick case"** (`agent/cases.html`, next to "+ New case"): a minimal modal taking only case
+  number and case type — for agents who just need to get a case logged fast and will fill in the
+  rest from the case page later. Reuses the same `case_types` dropdown data (Account Updates,
+  Service Request, Swap, Water Order).
+· **Notepad fields relabeled for clarity** — the phone field was labeled just "Number" next to a
+  separate "Account number" field, which read as ambiguous; relabeled to "Phone number" in both the
+  note form and the reminder detail chips. The customer name/phone/email/account-number fields
+  themselves already existed — they just never worked, for the reason above.
+
+**Process note:** this whole batch was found and fixed without ever touching real production data —
+every real-agent verification ran inside a `begin; set local role authenticated; ...; rollback;`
+block. The bug itself, though, was a reminder that RLS/SQL-level verification (the discipline this
+project has otherwise followed carefully) doesn't catch client-side JavaScript errors — only
+actually loading the page does. Added a page-error scanner (headless browser + mocked
+`supabase`/`auth` modules) as a repeatable check for this specific failure class going forward.
