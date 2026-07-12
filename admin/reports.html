@@ -36,6 +36,26 @@
 
     <main class="main">
       <div class="card">
+        <h2 style="margin:0 0 4px;">📈 Team trends</h2>
+        <p class="hint" id="trend-subheading" style="margin:0 0 14px;">Collective, company-wide — every case, every agent, last 8 weeks. Not filtered by the report below.</p>
+        <p class="hint" id="trend-direction" style="font-weight:600; color:var(--accent-blue); margin:0 0 16px;"></p>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:20px;">
+          <div>
+            <h4 style="margin:0 0 8px;">⏱ Avg. time to close</h4>
+            <div id="trend-time"></div>
+          </div>
+          <div>
+            <h4 style="margin:0 0 8px;">✅ Cases closed</h4>
+            <div id="trend-volume"></div>
+          </div>
+          <div>
+            <h4 style="margin:0 0 8px;">🚨 Escalations breaching SLA</h4>
+            <div id="trend-breach"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h2 style="margin:0 0 4px;">Agent performance</h2>
         <p class="hint">Rank agents, then copy a formatted summary straight into Outlook or Teams.</p>
         <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; margin-top:16px;">
@@ -112,6 +132,7 @@
     if (profile) {
       subscribeToNotifications(profile.id);
       await loadDepartments();
+      await loadTeamTrends();
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
@@ -129,6 +150,99 @@
       const { data } = await supabase.from('departments').select('id, name').eq('is_active', true).order('name');
       document.getElementById('department-filter').innerHTML = '<option value="">All departments</option>' +
         (data || []).map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+    }
+
+    // ---- Team trends: collective, company-wide weekly averages — not sliced by
+    // agent, so it answers "is the whole team getting faster/slower" at a glance. ----
+    function renderTrendChart(containerId, weekLabels, values, color, format) {
+      const numeric = values.filter(v => v !== null);
+      const max = Math.max(1, ...numeric);
+      const bars = weekLabels.map((label, i) => {
+        const v = values[i];
+        const heightPct = v === null ? 2 : Math.max(3, Math.round((v / max) * 100));
+        return `
+          <div style="display:flex; flex-direction:column; align-items:center; flex:1; min-width:0;">
+            <div class="hint" style="font-size:0.7rem; margin-bottom:4px; white-space:nowrap;">${v === null ? '–' : format(v)}</div>
+            <div style="width:100%; max-width:34px; height:90px; display:flex; align-items:flex-end; background:var(--light-blue); border-radius:4px; overflow:hidden;">
+              <div style="width:100%; height:${heightPct}%; background:${v === null ? 'var(--border)' : color};"></div>
+            </div>
+            <div class="hint" style="font-size:0.68rem; margin-top:4px; white-space:nowrap;">${label}</div>
+          </div>
+        `;
+      }).join('');
+      document.getElementById(containerId).innerHTML = `<div style="display:flex; gap:6px; align-items:flex-end;">${bars}</div>`;
+    }
+
+    async function loadTeamTrends() {
+      const WEEKS = 8;
+      const weekStarts = [];
+      const monday = new Date();
+      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+      monday.setHours(0, 0, 0, 0);
+      for (let i = WEEKS - 1; i >= 0; i--) {
+        const start = new Date(monday);
+        start.setDate(start.getDate() - i * 7);
+        weekStarts.push(start);
+      }
+
+      function weekIndexFor(dateStr) {
+        const d = new Date(dateStr);
+        for (let i = weekStarts.length - 1; i >= 0; i--) {
+          if (d >= weekStarts[i]) return i;
+        }
+        return -1;
+      }
+
+      const [{ data: closedCases }, { data: escAudits }] = await Promise.all([
+        supabase.from('cases').select('created_at, closed_at').gte('closed_at', weekStarts[0].toISOString()),
+        supabase.from('escalation_audit').select('closed_at, was_overdue').gte('closed_at', weekStarts[0].toISOString()).not('closed_at', 'is', null),
+      ]);
+
+      const buckets = weekStarts.map(() => ({ closedCount: 0, hoursSum: 0, hoursCount: 0, escTotal: 0, escOverdue: 0 }));
+
+      for (const c of closedCases || []) {
+        const idx = weekIndexFor(c.closed_at);
+        if (idx < 0) continue;
+        buckets[idx].closedCount++;
+        if (c.created_at) {
+          buckets[idx].hoursSum += (new Date(c.closed_at) - new Date(c.created_at)) / 3600000;
+          buckets[idx].hoursCount++;
+        }
+      }
+      for (const e of escAudits || []) {
+        const idx = weekIndexFor(e.closed_at);
+        if (idx < 0) continue;
+        buckets[idx].escTotal++;
+        if (e.was_overdue) buckets[idx].escOverdue++;
+      }
+
+      const labels = weekStarts.map(d => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }));
+      const avgHours = buckets.map(b => (b.hoursCount ? b.hoursSum / b.hoursCount : null));
+      const closedCounts = buckets.map(b => b.closedCount);
+      const breachPct = buckets.map(b => (b.escTotal ? Math.round((b.escOverdue / b.escTotal) * 100) : null));
+
+      renderTrendChart('trend-time', labels, avgHours, '#0072CE', formatDuration);
+      renderTrendChart('trend-volume', labels, closedCounts, '#2E7D32', v => String(v));
+      renderTrendChart('trend-breach', labels, breachPct, '#F57C00', v => `${v}%`);
+
+      // Plain-language direction: last 2 weeks' average vs the 2 weeks before that.
+      const trendEl = document.getElementById('trend-direction');
+      const recent = avgHours.slice(-2).filter(v => v !== null);
+      const prior = avgHours.slice(-4, -2).filter(v => v !== null);
+      if (recent.length && prior.length) {
+        const recentAvg = recent.reduce((s, v) => s + v, 0) / recent.length;
+        const priorAvg = prior.reduce((s, v) => s + v, 0) / prior.length;
+        const diffPct = priorAvg > 0 ? Math.round(((recentAvg - priorAvg) / priorAvg) * 100) : 0;
+        if (Math.abs(diffPct) < 5) {
+          trendEl.textContent = '↔ Time-to-close has been steady over the last month.';
+        } else if (diffPct < 0) {
+          trendEl.textContent = `📉 Improving — the team closed cases ${Math.abs(diffPct)}% faster over the last 2 weeks than the 2 before that.`;
+        } else {
+          trendEl.textContent = `📈 Slower — the team took ${diffPct}% longer to close cases over the last 2 weeks than the 2 before that.`;
+        }
+      } else {
+        trendEl.textContent = '';
+      }
     }
 
     function resolveRange() {
