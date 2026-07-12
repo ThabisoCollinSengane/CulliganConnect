@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Import &amp; Assign – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <nav>
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/import.html" class="active">Import</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/templates.html">Templates</a>
+      <a href="/admin/reports.html">Reports</a>
+      <a href="/admin/settings.html">Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/import.html" class="active">Import</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/templates.html">Templates</a>
+      <a href="/admin/reports.html">Reports</a>
+      <a href="/admin/settings.html">Departments &amp; Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <h2 style="margin:0 0 4px;">Import &amp; assign cases</h2>
+        <p class="hint">In Salesforce, click into the case list, press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy every row, then paste below. CulliganConnect reads the columns and shares the cases out to your agents however you choose.</p>
+        <textarea id="paste-box" rows="8" placeholder="Paste the copied Salesforce cases here…" style="font-family: ui-monospace, monospace; font-size:0.82rem;"></textarea>
+        <div style="display:flex; gap:16px; align-items:center; margin-top:10px; flex-wrap:wrap;">
+          <label style="margin:0; display:flex; align-items:center; gap:6px;">
+            <input type="checkbox" id="has-header" checked style="width:auto;" /> First row is a header
+          </label>
+          <button class="btn" id="parse-btn">Parse</button>
+          <span class="hint" id="parse-summary"></span>
+        </div>
+        <p class="error-text hidden" id="parse-error"></p>
+      </div>
+
+      <div class="card hidden" id="mapping-card">
+        <h3 style="margin:0 0 4px;">Match the columns</h3>
+        <p class="hint">Tell CulliganConnect which pasted column is which. Anything set to “Ignore” is skipped.</p>
+        <table id="mapping-table">
+          <thead><tr><th>Pasted column</th><th>Sample</th><th>Maps to</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card hidden" id="distribute-card">
+        <h3 style="margin:0 0 4px;">Distribute</h3>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;">
+          <div>
+            <label style="margin-top:0;">Share cases out…</label>
+            <select id="mode" style="width:260px;">
+              <option value="agent">By agent (round-robin)</option>
+              <option value="department">By department</option>
+              <option value="team">By team</option>
+              <option value="target">By target gap (catch-up — laggers get more)</option>
+            </select>
+          </div>
+          <div id="agent-picker-wrap">
+            <label style="margin-top:0;">Agents</label>
+            <select id="agent-picker" multiple size="5" style="min-width:220px;"></select>
+            <p class="hint">Ctrl/Cmd-click to pick several. None selected = all active agents.</p>
+          </div>
+          <div id="dept-picker-wrap" class="hidden">
+            <label style="margin-top:0;">Department</label>
+            <select id="dept-picker" style="min-width:220px;"></select>
+          </div>
+          <div id="team-picker-wrap" class="hidden">
+            <label style="margin-top:0;">Team</label>
+            <select id="team-picker" style="min-width:220px;"></select>
+          </div>
+        </div>
+        <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn secondary" id="preview-btn">Preview distribution</button>
+          <button class="btn" id="import-btn">Import &amp; assign</button>
+        </div>
+        <div id="dist-preview" style="margin-top:14px;"></div>
+        <p class="success-text hidden" id="import-success"></p>
+        <p class="error-text hidden" id="import-error"></p>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
+
+    const FIELDS = [
+      ['', 'Ignore'],
+      ['account_number', 'Account number'],
+      ['task_number', 'Task number'],
+      ['work_order_number', 'Work order number'],
+      ['customer_name', 'Customer name'],
+      ['customer_phone', 'Customer phone'],
+      ['customer_email', 'Customer email'],
+      ['sla_date', 'SLA date'],
+      ['quantity', 'Quantity'],
+      ['case_notes', 'Subject / description (as a note)'],
+    ];
+    // Header keyword → field, for auto-guessing the mapping.
+    const GUESS = [
+      [/account/i, 'account_number'],
+      [/task/i, 'task_number'],
+      [/work.?order|^wo\b/i, 'work_order_number'],
+      [/customer.*name|account name|name/i, 'customer_name'],
+      [/phone|mobile|tel/i, 'customer_phone'],
+      [/email|e-?mail/i, 'customer_email'],
+      [/sla|due/i, 'sla_date'],
+      [/qty|quantit|units/i, 'quantity'],
+      [/subject|description|reason|summary|case/i, 'case_notes'],
+    ];
+
+    let profile = null;
+    let parsed = { header: [], rows: [] };
+    let agents = [];       // {id, full_name, department_id, team_id}
+    let dailyTarget = 30;
+
+    // ---- Parse ----
+    function splitDelimited(line) {
+      if (line.includes('\t')) return line.split('\t');
+      if (/\s{2,}/.test(line)) return line.split(/\s{2,}/);
+      return [line];
+    }
+
+    document.getElementById('parse-btn').addEventListener('click', () => {
+      const errorEl = document.getElementById('parse-error');
+      errorEl.classList.add('hidden');
+      const raw = document.getElementById('paste-box').value.replace(/\r/g, '');
+      const lines = raw.split('\n').map(l => l.trimEnd()).filter(l => l.trim() !== '');
+      if (lines.length === 0) {
+        errorEl.textContent = 'Nothing to parse — paste the copied cases first.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      const hasHeader = document.getElementById('has-header').checked;
+      const matrix = lines.map(splitDelimited);
+      const cols = Math.max(...matrix.map(r => r.length));
+      const header = hasHeader
+        ? matrix[0].concat(Array(cols).fill('')).slice(0, cols).map((h, i) => h || `Column ${i + 1}`)
+        : Array.from({ length: cols }, (_, i) => `Column ${i + 1}`);
+      const rows = (hasHeader ? matrix.slice(1) : matrix).map(r => {
+        const padded = r.concat(Array(cols).fill('')).slice(0, cols);
+        return padded.map(c => (c || '').trim());
+      });
+
+      parsed = { header, rows };
+      renderMapping();
+      document.getElementById('parse-summary').textContent = `${rows.length} case(s) across ${cols} column(s).`;
+      document.getElementById('mapping-card').classList.remove('hidden');
+      document.getElementById('distribute-card').classList.remove('hidden');
+    });
+
+    function guessField(headerText) {
+      for (const [re, field] of GUESS) if (re.test(headerText)) return field;
+      return '';
+    }
+
+    function renderMapping() {
+      const tbody = document.querySelector('#mapping-table tbody');
+      tbody.innerHTML = '';
+      const used = new Set();
+      parsed.header.forEach((h, i) => {
+        let guess = guessField(h);
+        if (guess && used.has(guess)) guess = '';
+        if (guess) used.add(guess);
+        const sample = parsed.rows.find(r => r[i])?.[i] || '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${h}</td>
+          <td class="hint" style="max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sample}</td>
+          <td><select data-col="${i}" style="min-width:200px;">${
+            FIELDS.map(([v, l]) => `<option value="${v}" ${v === guess ? 'selected' : ''}>${l}</option>`).join('')
+          }</select></td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function buildCases() {
+      const mapping = {};
+      document.querySelectorAll('#mapping-table select').forEach(sel => {
+        if (sel.value) mapping[sel.value] = Number(sel.dataset.col);
+      });
+      return parsed.rows.map(r => {
+        const c = {};
+        for (const [field, col] of Object.entries(mapping)) {
+          const val = r[col];
+          if (val === undefined || val === '') continue;
+          if (field === 'quantity') { const n = parseInt(val, 10); if (Number.isFinite(n)) c.quantity = n; }
+          else if (field === 'sla_date') { const d = new Date(val); if (!isNaN(d)) c.sla_date = d.toISOString().slice(0, 10); }
+          else c[field] = val;
+        }
+        return c;
+      }).filter(c => Object.keys(c).length > 0);
+    }
+
+    // ---- Distribution ----
+    function roundRobin(pool, n) {
+      const out = [];
+      for (let i = 0; i < n; i++) out.push(pool[i % pool.length]);
+      return out;
+    }
+
+    async function targetGapAssignment(pool, n) {
+      const todayIso = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+      const today = new Date().toISOString().slice(0, 10);
+      const [{ data: closedRows }, { data: callRows }] = await Promise.all([
+        supabase.from('cases').select('closed_by').gte('closed_at', todayIso),
+        supabase.from('call_logs').select('agent_id, calls_taken').eq('call_date', today),
+      ]);
+      const done = {};
+      for (const a of pool) done[a.id] = 0;
+      for (const r of closedRows || []) if (r.closed_by in done) done[r.closed_by] += 1;
+      for (const r of callRows || []) if (r.agent_id in done) done[r.agent_id] += r.calls_taken;
+
+      const remaining = pool.map(a => Math.max(0, dailyTarget - (done[a.id] || 0)));
+      const totalRemaining = remaining.reduce((s, x) => s + x, 0);
+      if (totalRemaining === 0) return roundRobin(pool, n).map(a => a.id);
+
+      // Largest-remainder allocation proportional to how far each agent is from target.
+      const exact = remaining.map(r => (r / totalRemaining) * n);
+      const alloc = exact.map(Math.floor);
+      let assigned = alloc.reduce((s, x) => s + x, 0);
+      const frac = exact.map((e, i) => [i, e - Math.floor(e)]).sort((a, b) => b[1] - a[1]);
+      let fi = 0;
+      while (assigned < n) { alloc[frac[fi % frac.length][0]] += 1; assigned++; fi++; }
+
+      const out = [];
+      pool.forEach((a, i) => { for (let k = 0; k < alloc[i]; k++) out.push(a.id); });
+      return out;
+    }
+
+    async function computeAssignment(n) {
+      const mode = document.getElementById('mode').value;
+      let pool = agents;
+
+      if (mode === 'agent') {
+        const picked = [...document.getElementById('agent-picker').selectedOptions].map(o => o.value);
+        pool = picked.length ? agents.filter(a => picked.includes(a.id)) : agents;
+        if (!pool.length) throw new Error('No agents available to assign to.');
+        return roundRobin(pool, n).map(a => a.id);
+      }
+      if (mode === 'department') {
+        const dept = document.getElementById('dept-picker').value;
+        pool = agents.filter(a => a.department_id === dept);
+        if (!pool.length) throw new Error('No active agents in that department.');
+        return roundRobin(pool, n).map(a => a.id);
+      }
+      if (mode === 'team') {
+        const team = document.getElementById('team-picker').value;
+        pool = agents.filter(a => a.team_id === team);
+        if (!pool.length) throw new Error('No active agents in that team.');
+        return roundRobin(pool, n).map(a => a.id);
+      }
+      // target gap
+      if (!pool.length) throw new Error('No active agents available.');
+      return targetGapAssignment(pool, n);
+    }
+
+    function agentName(id) {
+      return agents.find(a => a.id === id)?.full_name || 'Unknown';
+    }
+
+    document.getElementById('preview-btn').addEventListener('click', async () => {
+      const errorEl = document.getElementById('import-error');
+      errorEl.classList.add('hidden');
+      document.getElementById('import-success').classList.add('hidden');
+      const cases = buildCases();
+      if (!cases.length) { errorEl.textContent = 'No cases parsed — check the column mapping.'; errorEl.classList.remove('hidden'); return; }
+      try {
+        const assignment = await computeAssignment(cases.length);
+        const counts = {};
+        assignment.forEach(id => { counts[id] = (counts[id] || 0) + 1; });
+        const rows = Object.entries(counts).sort((a, b) => b[1] - a[1])
+          .map(([id, c]) => `<tr><td>${agentName(id)}</td><td>${c}</td></tr>`).join('');
+        document.getElementById('dist-preview').innerHTML =
+          `<p class="hint">${cases.length} case(s) would be assigned as:</p>
+           <table><thead><tr><th>Agent</th><th>Cases</th></tr></thead><tbody>${rows}</tbody></table>`;
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove('hidden');
+      }
+    });
+
+    document.getElementById('import-btn').addEventListener('click', async () => {
+      const errorEl = document.getElementById('import-error');
+      const successEl = document.getElementById('import-success');
+      errorEl.classList.add('hidden');
+      successEl.classList.add('hidden');
+
+      const cases = buildCases();
+      if (!cases.length) { errorEl.textContent = 'No cases parsed — check the column mapping.'; errorEl.classList.remove('hidden'); return; }
+
+      const btn = document.getElementById('import-btn');
+      btn.disabled = true; btn.textContent = 'Importing…';
+      try {
+        const assignment = await computeAssignment(cases.length);
+        const notes = [];
+        const payload = cases.map((c, i) => {
+          const assignedTo = assignment[i];
+          const agent = agents.find(a => a.id === assignedTo);
+          const { case_notes, ...caseFields } = c;
+          if (case_notes) notes.push({ idx: i, text: case_notes });
+          return {
+            ...caseFields,
+            assigned_to: assignedTo,
+            department_id: agent?.department_id || null,
+            status: 'new',
+            source: 'salesforce_import',
+          };
+        });
+
+        const { data: inserted, error } = await supabase.from('cases').insert(payload).select('id');
+        if (error) throw new Error(error.message);
+
+        // Attach any subject/description as an internal note on each case.
+        if (notes.length && inserted) {
+          const noteRows = notes
+            .filter(n => inserted[n.idx])
+            .map(n => ({ case_id: inserted[n.idx].id, user_id: profile.id, note: n.text, note_type: 'internal' }));
+          if (noteRows.length) await supabase.from('case_notes').insert(noteRows);
+        }
+
+        successEl.textContent = `Imported and assigned ${inserted?.length ?? cases.length} case(s). Agents will see them on their My Day.`;
+        successEl.classList.remove('hidden');
+        document.getElementById('paste-box').value = '';
+        document.getElementById('mapping-card').classList.add('hidden');
+        document.getElementById('distribute-card').classList.add('hidden');
+        document.getElementById('dist-preview').innerHTML = '';
+        document.getElementById('parse-summary').textContent = '';
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove('hidden');
+      } finally {
+        btn.disabled = false; btn.textContent = 'Import & assign';
+      }
+    });
+
+    // ---- Mode controls ----
+    document.getElementById('mode').addEventListener('change', (e) => {
+      const m = e.target.value;
+      document.getElementById('agent-picker-wrap').classList.toggle('hidden', m !== 'agent');
+      document.getElementById('dept-picker-wrap').classList.toggle('hidden', m !== 'department');
+      document.getElementById('team-picker-wrap').classList.toggle('hidden', m !== 'team');
+    });
+
+    document.getElementById('logout-link').addEventListener('click', (e) => { e.preventDefault(); signOut(); });
+
+    // ---- Init (after handlers are registered) ----
+    profile = await requireRole(['admin']);
+    if (profile) {
+      subscribeToNotifications(profile.id);
+      const [{ data: agentData }, { data: depts }, { data: teams }, { data: settings }] = await Promise.all([
+        supabase.from('profiles').select('id, full_name, department_id, team_id').eq('role', 'agent').eq('is_active', true).order('full_name'),
+        supabase.from('departments').select('id, name').eq('is_active', true).order('name'),
+        supabase.from('teams').select('id, name').eq('is_active', true).order('name'),
+        supabase.from('org_settings').select('daily_target').eq('id', true).maybeSingle(),
+      ]);
+      agents = agentData || [];
+      dailyTarget = settings?.daily_target || 30;
+      document.getElementById('agent-picker').innerHTML = agents.map(a => `<option value="${a.id}">${a.full_name}</option>`).join('');
+      document.getElementById('dept-picker').innerHTML = (depts || []).map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+      document.getElementById('team-picker').innerHTML = (teams || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+      if (!(depts || []).length) document.getElementById('dept-picker').innerHTML = '<option value="">(no departments)</option>';
+      if (!(teams || []).length) document.getElementById('team-picker').innerHTML = '<option value="">(no teams)</option>';
+    }
+  </script>
+</body>
+</html>

@@ -1080,3 +1080,41 @@ security-definer functions: always `revoke execute from public, anon, authentica
   permissions boundary — just a grouping label to separate each team leader's people, per the
   user's request ("no need to create a group, just a simple team"). RLS: authenticated read,
   admins write. The previously non-functional "create team" expectation is now real.
+
+---
+
+📥 v16 Update – Salesforce paste-importer + fillable escalation templates (2026-07-11)
+
+**The core "automate the agent's work" batch.**
+
+· **Escalation templates are now directly usable from the Templates page**
+  (`agent/templates.html`): each escalation template got a "Use template" button opening a modal
+  that renders the service-centre email and the customer reply **side by side**, with one small
+  form of fields (Account #, Customer name, Task #, Work order #, Quantity, SLA date, Service,
+  and the service-centre Update) that fills BOTH emails live as you type ({NAME} auto-filled).
+  Copy button per panel. Previously these were read-only reference on this page — the user
+  reported "the system isnt doing this at all", and this closes it. (The case-page escalation
+  flow from v12 still exists; this makes the same thing work standalone from Templates.)
+
+· **Salesforce bulk import + auto-distribution** (`admin/import.html`, new page + "Import" nav
+  link across all admin pages): a team leader copies the whole Salesforce case grid
+  (Ctrl+A / Ctrl+C) and pastes it into a big box. The parser is format-tolerant — splits on tabs
+  (falls back to 2+ spaces), optional header row, and a **column-mapping step** (auto-guesses
+  Account/Task/Work order/Customer/Phone/Email/SLA/Qty/Subject from header keywords, admin can
+  correct). Parsed cases are then distributed by one of four modes:
+    - **By agent** — round-robin among selected agents (or all if none picked).
+    - **By department** — round-robin among active agents in a department.
+    - **By team** — round-robin among a team's agents.
+    - **By target gap (catch-up)** — weights allocation by each agent's remaining-to-target
+      (closed-today + calls-today vs `org_settings.daily_target`, default 30) using
+      largest-remainder; agents furthest from target get proportionally more, so laggers catch up.
+      Falls back to round-robin if everyone's already at target.
+  "Preview distribution" shows per-agent counts before committing. On import, cases are inserted
+  (auto case_number via the existing trigger, `status='new'`, `source='salesforce_import'`,
+  `department_id` copied from the assigned agent) and any mapped Subject/description becomes an
+  internal note on the case. Agents see their assigned cases immediately on My Day.
+  Verified a case insert live (auto case-number, defaults) in a rolled-back txn.
+
+Note on workflow: this is deliberately paste-based (not a Salesforce API integration) — the user
+works from copied screens; agents still close on both Salesforce and CulliganConnect. No email is
+sent from the app; templates remain copy-to-clipboard by design.

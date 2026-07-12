@@ -106,6 +106,36 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="esc-use-backdrop">
+    <div class="modal" style="max-width:900px;">
+      <h3 id="esc-use-title">Use escalation template</h3>
+      <p class="hint">Fill in the details once — both emails generate as you type. Your name is filled in for you.</p>
+      <div id="esc-use-fields" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0 14px;"></div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; margin-top:14px;">
+        <div style="border:1px solid var(--border); border-radius:8px; padding:12px;">
+          <div class="toolbar" style="margin-bottom:8px;">
+            <h4 style="margin:0;">📤 Service centre</h4>
+            <button type="button" class="btn" id="esc-copy-depot">Copy</button>
+          </div>
+          <p style="font-weight:600; margin:0 0 6px; font-size:0.88rem;" id="esc-depot-subject"></p>
+          <div id="esc-depot-body" style="white-space:pre-wrap; font-size:0.85rem; background:var(--light-blue); border-radius:6px; padding:10px 12px; max-height:260px; overflow-y:auto;"></div>
+        </div>
+        <div style="border:1px solid var(--border); border-radius:8px; padding:12px;">
+          <div class="toolbar" style="margin-bottom:8px;">
+            <h4 style="margin:0;">💬 Customer reply</h4>
+            <button type="button" class="btn" id="esc-copy-customer">Copy</button>
+          </div>
+          <p style="font-weight:600; margin:0 0 6px; font-size:0.88rem;" id="esc-customer-subject"></p>
+          <div id="esc-customer-body" style="white-space:pre-wrap; font-size:0.85rem; background:var(--light-blue); border-radius:6px; padding:10px 12px; max-height:260px; overflow-y:auto;"></div>
+        </div>
+      </div>
+      <p class="success-text hidden" id="esc-copied"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="esc-use-close">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="note-modal-backdrop">
     <div class="modal" style="max-width:560px;">
       <h3 id="note-modal-title">New note</h3>
@@ -165,7 +195,10 @@
         const wrap = document.createElement('div');
         wrap.style.cssText = 'margin-bottom:18px;';
         wrap.innerHTML = `
-          <h3 style="margin:0 0 8px;">${t.escalation_reasons?.name || 'Escalation'}</h3>
+          <div class="toolbar" style="margin-bottom:8px;">
+            <h3 style="margin:0;">${t.escalation_reasons?.name || 'Escalation'}</h3>
+            <button class="btn esc-use-btn">Use template</button>
+          </div>
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px;">
             <div style="border:1px solid var(--border); border-radius:8px; padding:12px;">
               <p class="hint" style="margin:0 0 6px; font-weight:600;">📤 Step 1 — Send to service centre</p>
@@ -179,9 +212,80 @@
             </div>
           </div>
         `;
+        wrap.querySelector('.esc-use-btn').addEventListener('click', () => openEscalationUse(t));
         list.appendChild(wrap);
       }
     }
+
+    // ---- Escalation "Use template": fill both emails side by side from one form ----
+    const ESC_TOKENS = [
+      ['ACCOUNT', 'Account number'],
+      ['CUSTOMER', 'Customer name'],
+      ['TASK', 'Task number'],
+      ['WORKORDER', 'Work order number'],
+      ['QTY', 'Quantity'],
+      ['SLADATE', 'SLA due date'],
+      ['SERVICE', 'Service type'],
+      ['UPDATE', "Service centre's update (for the customer email)"],
+    ];
+    let escTemplate = null;
+    const escModal = document.getElementById('esc-use-backdrop');
+
+    function openEscalationUse(t) {
+      escTemplate = t;
+      document.getElementById('esc-use-title').textContent = `Use: ${t.escalation_reasons?.name || 'Escalation'}`;
+      document.getElementById('esc-copied').classList.add('hidden');
+
+      const all = [t.depot_subject, t.depot_body, t.customer_subject, t.customer_body].join(' ');
+      const fieldsEl = document.getElementById('esc-use-fields');
+      fieldsEl.innerHTML = '';
+      for (const [token, label] of ESC_TOKENS) {
+        if (!all.includes(`{${token}}`)) continue;
+        const wrapEl = document.createElement('div');
+        wrapEl.className = 'form-row';
+        const lbl = document.createElement('label');
+        lbl.textContent = label;
+        const input = document.createElement('input');
+        input.dataset.token = token;
+        input.addEventListener('input', renderEscPreview);
+        wrapEl.append(lbl, input);
+        fieldsEl.appendChild(wrapEl);
+      }
+
+      renderEscPreview();
+      escModal.classList.remove('hidden');
+    }
+
+    function escValues() {
+      const values = { NAME: profile.full_name || '' };
+      document.querySelectorAll('#esc-use-fields input').forEach(i => { values[i.dataset.token] = i.value.trim(); });
+      return values;
+    }
+
+    function renderEscPreview() {
+      const v = escValues();
+      document.getElementById('esc-depot-subject').textContent = fillPlaceholders(escTemplate.depot_subject || '', v);
+      document.getElementById('esc-depot-body').textContent = fillPlaceholders(escTemplate.depot_body || '', v);
+      document.getElementById('esc-customer-subject').textContent = fillPlaceholders(escTemplate.customer_subject || '', v);
+      document.getElementById('esc-customer-body').textContent = fillPlaceholders(escTemplate.customer_body || '', v);
+    }
+
+    async function escCopy(which) {
+      const v = escValues();
+      const text = which === 'depot'
+        ? `${fillPlaceholders(escTemplate.depot_subject || '', v)}\n\n${fillPlaceholders(escTemplate.depot_body || '', v)}`
+        : `${fillPlaceholders(escTemplate.customer_subject || '', v)}\n\n${fillPlaceholders(escTemplate.customer_body || '', v)}`;
+      const ok = await copyToClipboard(text);
+      const el = document.getElementById('esc-copied');
+      el.textContent = ok
+        ? `${which === 'depot' ? 'Service-centre' : 'Customer'} email copied — paste it into Outlook/Teams.`
+        : 'Could not copy — copy from the preview manually.';
+      el.classList.remove('hidden');
+    }
+
+    document.getElementById('esc-copy-depot').addEventListener('click', () => escCopy('depot'));
+    document.getElementById('esc-copy-customer').addEventListener('click', () => escCopy('customer'));
+    document.getElementById('esc-use-close').addEventListener('click', () => escModal.classList.add('hidden'));
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
       e.preventDefault();
