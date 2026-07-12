@@ -146,6 +146,7 @@
 
     const profile = await requireRole(['admin']);
     let teams = [];
+    let departments = [];
     if (profile) {
       subscribeToNotifications(profile.id);
       await loadDepartments();
@@ -162,11 +163,15 @@
     document.getElementById('add-agent-btn').addEventListener('click', () => modal.classList.remove('hidden'));
     document.getElementById('cancel-btn').addEventListener('click', () => modal.classList.add('hidden'));
 
+    function deptOptions(selectedId) {
+      return '<option value="">— none —</option>' +
+        departments.map(d => `<option value="${d.id}" ${d.id === selectedId ? 'selected' : ''}>${d.name}</option>`).join('');
+    }
+
     async function loadDepartments() {
       const { data } = await supabase.from('departments').select('id, name').eq('is_active', true).order('name');
-      const select = document.getElementById('department');
-      select.innerHTML = '<option value="">— none —</option>' +
-        (data || []).map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+      departments = data || [];
+      document.getElementById('department').innerHTML = deptOptions(null);
     }
 
     // ---- Teams ----
@@ -220,7 +225,7 @@
     async function loadAgents() {
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, email, role, is_active, team_id, departments(name), agent_onboarding(temp_password)')
+        .select('id, full_name, email, role, is_active, team_id, department_id, agent_onboarding(temp_password)')
         .order('full_name');
 
       const tbody = document.querySelector('#agents-table tbody');
@@ -251,7 +256,7 @@
           <td>${u.full_name || '—'}</td>
           <td>${u.email}</td>
           <td><select class="team-select" data-id="${u.id}" style="min-width:140px;">${teamOptions(u.team_id)}</select></td>
-          <td>${u.departments?.name || '—'}</td>
+          <td><select class="dept-select" data-id="${u.id}" style="min-width:140px;">${deptOptions(u.department_id)}</select></td>
           <td><span class="badge blue">${u.role}</span></td>
           <td>${tempCell}</td>
           <td>${statusBadge}</td>
@@ -267,6 +272,14 @@
         sel.addEventListener('change', async () => {
           const { error: upErr } = await supabase.from('profiles')
             .update({ team_id: sel.value || null }).eq('id', sel.dataset.id);
+          if (upErr) { alert(upErr.message); await loadAgents(); }
+        });
+      });
+
+      tbody.querySelectorAll('.dept-select').forEach(sel => {
+        sel.addEventListener('change', async () => {
+          const { error: upErr } = await supabase.from('profiles')
+            .update({ department_id: sel.value || null }).eq('id', sel.dataset.id);
           if (upErr) { alert(upErr.message); await loadAgents(); }
         });
       });

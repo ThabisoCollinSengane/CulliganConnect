@@ -78,8 +78,9 @@
           </div>
         </div>
         <p class="hint print-only" id="print-heading"></p>
+        <p class="hint" id="resolution-summary"></p>
         <table id="ranking-table">
-          <thead><tr><th>#</th><th>Agent</th><th>Department</th><th>Closed</th><th>Interacted</th><th>Calls taken</th><th>Escalated</th><th>SLA breaches</th><th>Weighted</th></tr></thead>
+          <thead><tr><th>#</th><th>Agent</th><th>Department</th><th>Closed</th><th>Interacted</th><th>Calls taken</th><th>Escalated</th><th>SLA breaches</th><th>Weighted</th><th>Avg. time to close</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -106,6 +107,7 @@
     let lastResults = null;
     let lastRangeLabel = '';
     let lastDeptLabel = 'All departments';
+    let lastTeamAvgResolutionHours = null;
 
     if (profile) {
       subscribeToNotifications(profile.id);
@@ -171,8 +173,8 @@
       const today = new Date().toISOString().slice(0, 10);
 
       const rows = await Promise.all((agentList || []).map(async (agent) => {
-        const [{ count: closed }, { data: notes }, { count: escalated }, { count: slaBreaches }, { data: calls }] = await Promise.all([
-          supabase.from('cases').select('id', { count: 'exact', head: true })
+        const [{ data: closedCases }, { data: notes }, { count: escalated }, { count: slaBreaches }, { data: calls }] = await Promise.all([
+          supabase.from('cases').select('id, created_at, closed_at')
             .eq('closed_by', agent.id).gte('closed_at', from.toISOString()).lte('closed_at', to.toISOString()),
           supabase.from('case_notes').select('case_id')
             .eq('user_id', agent.id).gte('created_at', from.toISOString()).lte('created_at', to.toISOString()),
@@ -185,8 +187,17 @@
         ]);
 
         const interacted = new Set((notes || []).map(n => n.case_id)).size;
-        const closedCount = closed || 0;
+        const closedCount = (closedCases || []).length;
         const callsTaken = (calls || []).reduce((s, c) => s + c.calls_taken, 0);
+        // Time-to-close: how long each case lived from creation to closing —
+        // the "case lifetime timer" the user asked for. Not shown live on any
+        // screen; only the resulting duration surfaces here once a case closes.
+        const resolutionHours = (closedCases || [])
+          .filter(c => c.created_at && c.closed_at)
+          .map(c => (new Date(c.closed_at) - new Date(c.created_at)) / 3600000);
+        const avgResolutionHours = resolutionHours.length
+          ? resolutionHours.reduce((s, h) => s + h, 0) / resolutionHours.length
+          : null;
         return {
           agent,
           closed: closedCount,
@@ -195,26 +206,58 @@
           escalated: escalated || 0,
           slaBreaches: slaBreaches || 0,
           weighted: closedCount * 2 + interacted,
+          resolutionHours,
+          avgResolutionHours,
         };
       }));
+
+      // Team average is computed from every individual case's resolution time,
+      // not an average of per-agent averages, so agents who closed more cases
+      // weigh the baseline proportionally more.
+      const allResolutionHours = rows.flatMap(r => r.resolutionHours);
+      const teamAvgResolutionHours = allResolutionHours.length
+        ? allResolutionHours.reduce((s, h) => s + h, 0) / allResolutionHours.length
+        : null;
 
       const rankBy = document.getElementById('rank-by').value;
       rows.sort((a, b) => b[rankBy === 'closed' ? 'closed' : rankBy === 'interacted' ? 'interacted' : 'weighted']
         - a[rankBy === 'closed' ? 'closed' : rankBy === 'interacted' ? 'interacted' : 'weighted']);
 
       lastResults = rows;
-      renderTable(rows);
+      lastTeamAvgResolutionHours = teamAvgResolutionHours;
+      renderTable(rows, teamAvgResolutionHours);
+      document.getElementById('resolution-summary').textContent = teamAvgResolutionHours !== null
+        ? `Team average time to close a case: ${formatDuration(teamAvgResolutionHours)}.`
+        : 'No cases closed in this range yet, so there\'s no time-to-close average.';
       document.getElementById('print-heading').textContent =
         `Culligan Performance Report — ${lastDeptLabel} — ${lastRangeLabel} — generated ${new Date().toLocaleString()}`;
       document.getElementById('results-card').classList.remove('hidden');
       document.getElementById('email-card').classList.add('hidden');
     }
 
-    function renderTable(rows) {
+    // Formats hours as e.g. "45m", "3h 20m", or "1d 4h".
+    function formatDuration(hours) {
+      if (hours === null || hours === undefined) return '—';
+      if (hours < 1) return `${Math.round(hours * 60)}m`;
+      if (hours < 24) return `${Math.floor(hours)}h ${Math.round((hours % 1) * 60)}m`;
+      return `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`;
+    }
+
+    function resolutionCell(r, teamAvg) {
+      if (r.avgResolutionHours === null) return '<span class="hint">—</span>';
+      const duration = formatDuration(r.avgResolutionHours);
+      if (teamAvg === null || teamAvg === 0) return duration;
+      const diffPct = Math.round(((r.avgResolutionHours - teamAvg) / teamAvg) * 100);
+      if (Math.abs(diffPct) < 5) return `${duration} <span class="badge grey">on par</span>`;
+      const faster = diffPct < 0;
+      return `${duration} <span class="badge ${faster ? 'green' : 'orange'}">${faster ? '▼' : '▲'} ${Math.abs(diffPct)}% ${faster ? 'faster' : 'slower'}</span>`;
+    }
+
+    function renderTable(rows, teamAvgResolutionHours) {
       const tbody = document.querySelector('#ranking-table tbody');
       tbody.innerHTML = '';
       if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" class="hint">No agents match this filter.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="hint">No agents match this filter.</td></tr>';
         return;
       }
       rows.forEach((r, i) => {
@@ -229,6 +272,7 @@
           <td>${r.escalated}</td>
           <td>${r.slaBreaches}</td>
           <td>${r.weighted}</td>
+          <td>${resolutionCell(r, teamAvgResolutionHours)}</td>
         `;
         tbody.appendChild(tr);
       });
@@ -236,11 +280,16 @@
 
     document.getElementById('export-csv-btn').addEventListener('click', () => {
       if (!lastResults) return;
-      const header = 'Rank,Agent,Department,Closed,Interacted,Calls Taken,Escalated,SLA Breaches,Weighted\n';
-      const rows = lastResults.map((r, i) =>
-        [i + 1, r.agent.full_name, r.agent.departments?.name || '', r.closed, r.interacted, r.callsTaken, r.escalated, r.slaBreaches, r.weighted]
-          .map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
-      ).join('\n');
+      const header = 'Rank,Agent,Department,Closed,Interacted,Calls Taken,Escalated,SLA Breaches,Weighted,Avg Time To Close (hours),Vs Team Average\n';
+      const rows = lastResults.map((r, i) => {
+        const vsTeam = (r.avgResolutionHours === null || lastTeamAvgResolutionHours === null || lastTeamAvgResolutionHours === 0)
+          ? ''
+          : `${Math.round(((r.avgResolutionHours - lastTeamAvgResolutionHours) / lastTeamAvgResolutionHours) * 100)}%`;
+        return [
+          i + 1, r.agent.full_name, r.agent.departments?.name || '', r.closed, r.interacted, r.callsTaken, r.escalated, r.slaBreaches, r.weighted,
+          r.avgResolutionHours === null ? '' : r.avgResolutionHours.toFixed(2), vsTeam,
+        ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',');
+      }).join('\n');
       const blob = new Blob([header + rows], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -278,12 +327,13 @@
         const sum = (key) => lastResults.reduce((s, r) => s + r[key], 0);
         autoTable(doc, {
           startY: 75,
-          head: [['#', 'Agent', 'Department', 'Closed', 'Interacted', 'Calls taken', 'Escalated', 'SLA breaches', 'Weighted']],
+          head: [['#', 'Agent', 'Department', 'Closed', 'Interacted', 'Calls taken', 'Escalated', 'SLA breaches', 'Weighted', 'Avg. time to close']],
           body: lastResults.map((r, i) => [
             i + 1, r.agent.full_name, r.agent.departments?.name || '—',
             r.closed, r.interacted, r.callsTaken, r.escalated, r.slaBreaches, r.weighted,
+            formatDuration(r.avgResolutionHours),
           ]),
-          foot: [['', 'Total', '', sum('closed'), sum('interacted'), sum('callsTaken'), sum('escalated'), sum('slaBreaches'), sum('weighted')]],
+          foot: [['', 'Total', '', sum('closed'), sum('interacted'), sum('callsTaken'), sum('escalated'), sum('slaBreaches'), sum('weighted'), formatDuration(lastTeamAvgResolutionHours)]],
           styles: { fontSize: 9, cellPadding: 5 },
           headStyles: { fillColor: [0, 51, 160], textColor: 255 },
           footStyles: { fillColor: [232, 240, 254], textColor: [0, 34, 102], fontStyle: 'bold' },
@@ -325,6 +375,7 @@ Here is the performance summary for ${lastRangeLabel.toLowerCase()}.
 - Total cases closed: ${totalClosed}
 - Escalations: ${totalEscalated}
 - SLA breaches: ${totalSla}
+- Avg. time to close a case: ${formatDuration(lastTeamAvgResolutionHours)}
 
 🏆 Top Performer (Closures): ${topClosed?.agent.full_name || '—'} – ${topClosed?.closed || 0} cases closed
 🏆 Top Performer (Interactions): ${topInteracted?.agent.full_name || '—'} – ${topInteracted?.interacted || 0} case interactions
