@@ -146,7 +146,7 @@
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 14px;">
           <div class="form-row"><label>Customer name</label><input id="qn-customer" /></div>
           <div class="form-row"><label>Business name</label><input id="qn-business" /></div>
-          <div class="form-row"><label>Number</label><input id="qn-phone" /></div>
+          <div class="form-row"><label>Phone number</label><input id="qn-phone" /></div>
           <div class="form-row"><label>Email</label><input id="qn-email" type="email" /></div>
           <div class="form-row"><label>Account number</label><input id="qn-account" /></div>
           <div class="form-row"><label>Task number</label><input id="qn-task" /></div>
@@ -167,6 +167,7 @@
     import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['agent', 'admin']);
+    let myQuickNotes = [];
     if (profile) {
       subscribeToNotifications(profile.id);
       await Promise.all([loadTemplates(), loadEscalationTemplates(), loadQuickNotes(), loadReminders()]);
@@ -469,7 +470,7 @@
     const NOTE_DETAIL_FIELDS = [
       ['customer_name', 'Customer'],
       ['business_name', 'Business'],
-      ['phone', 'Number'],
+      ['phone', 'Phone'],
       ['email', 'Email'],
       ['account_number', 'Account #'],
       ['task_number', 'Task #'],
@@ -482,8 +483,6 @@
           `<span class="badge blue" style="margin:2px 4px 2px 0;">${label}: ${n[key]}</span>`)
         .join('');
     }
-
-    let myQuickNotes = [];
 
     async function loadQuickNotes() {
       const { data, error } = await supabase.from('quick_notes').select('*').order('updated_at', { ascending: false });

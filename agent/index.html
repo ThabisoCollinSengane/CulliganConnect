@@ -142,6 +142,15 @@
     let dailyTarget = 30;
     let todayClosed = 0;
     let todayCalls = 0;
+    let callsUpdatedAt = null;
+
+    const MOODS = [
+      { key: 'great', label: '😄 Great' },
+      { key: 'good', label: '🙂 Good' },
+      { key: 'okay', label: '😐 Okay' },
+      { key: 'stressed', label: '😣 Stressed' },
+      { key: 'overwhelmed', label: '🥵 Overwhelmed' },
+    ];
 
     if (profile) {
       subscribeToNotifications(profile.id, () => loadNotifications());
@@ -178,13 +187,20 @@
       if (newBadges.length) showBadgeToast(newBadges);
     }
 
-    function showBadgeToast(badges) {
+    function showToast(html, { color = 'var(--orange)', ms = 4000 } = {}) {
       const toast = document.createElement('div');
-      toast.style.cssText = 'position:fixed; bottom:20px; right:20px; z-index:100; background:var(--white); box-shadow:var(--shadow); border-left:4px solid var(--orange); border-radius:8px; padding:14px 18px; max-width:320px;';
-      toast.innerHTML = `<strong>🎉 New badge${badges.length > 1 ? 's' : ''} unlocked!</strong>` +
-        badges.map(b => `<div style="margin-top:4px;">${b.label}</div>`).join('');
+      toast.style.cssText = `position:fixed; bottom:20px; right:20px; z-index:100; background:var(--white); box-shadow:var(--shadow); border-left:4px solid ${color}; border-radius:8px; padding:14px 18px; max-width:320px;`;
+      toast.innerHTML = html;
       document.body.appendChild(toast);
-      setTimeout(() => toast.remove(), 6000);
+      setTimeout(() => toast.remove(), ms);
+    }
+
+    function showBadgeToast(badges) {
+      showToast(
+        `<strong>🎉 New badge${badges.length > 1 ? 's' : ''} unlocked!</strong>` +
+        badges.map(b => `<div style="margin-top:4px;">${b.label}</div>`).join(''),
+        { ms: 6000 }
+      );
     }
 
     async function renderActivityFeed() {
@@ -223,7 +239,7 @@
       const DETAILS = [
         ['customer_name', 'Customer'],
         ['business_name', 'Business'],
-        ['phone', 'Number'],
+        ['phone', 'Phone'],
         ['email', 'Email'],
         ['account_number', 'Account #'],
         ['task_number', 'Task #'],
@@ -286,32 +302,36 @@
 
     function updateMeter() {
       const done = todayClosed + todayCalls;
-      const pct = Math.min(100, Math.round((done / dailyTarget) * 100));
+      // The true percentage keeps climbing past 100% once target is beaten —
+      // only the ring's stroke is capped, since it can't visually wrap past a
+      // full circle. Text (percent + count) always reflects the real numbers.
+      const pctTrue = Math.round((done / dailyTarget) * 100);
+      const pctRing = Math.min(100, pctTrue);
       const circumference = 402.12;
 
       const progress = document.getElementById('meter-progress');
-      progress.setAttribute('stroke-dashoffset', String(circumference * (1 - pct / 100)));
-      progress.setAttribute('stroke', pct >= 100 ? 'var(--green)' : 'var(--accent-blue)');
+      progress.setAttribute('stroke-dashoffset', String(circumference * (1 - pctRing / 100)));
+      progress.setAttribute('stroke', pctTrue >= 100 ? 'var(--green)' : 'var(--accent-blue)');
 
       const pctText = document.getElementById('meter-pct');
-      pctText.textContent = `${pct}%`;
-      pctText.setAttribute('fill', pct >= 100 ? 'var(--green)' : 'var(--primary-blue)');
+      pctText.textContent = `${pctTrue}%`;
+      pctText.setAttribute('fill', pctTrue >= 100 ? 'var(--green)' : 'var(--primary-blue)');
       document.getElementById('meter-count').textContent = `${done} / ${dailyTarget}`;
 
       const msg = document.getElementById('meter-message');
+      const over = done - dailyTarget;
       if (done === 0) msg.textContent = 'Let’s get the first one on the board!';
-      else if (pct < 50) msg.textContent = 'Nice pace — keep it rolling.';
-      else if (pct < 100) msg.textContent = 'Over halfway. Push for the target!';
-      else msg.textContent = '🎉 Target smashed — everything from here is bonus.';
-      msg.style.color = pct >= 100 ? 'var(--green)' : 'var(--accent-blue)';
+      else if (pctTrue < 50) msg.textContent = 'Nice pace — keep it rolling.';
+      else if (pctTrue < 100) msg.textContent = 'Over halfway. Push for the target!';
+      else if (over === 0) msg.textContent = '🎉 Target smashed — everything from here is bonus.';
+      else msg.textContent = `🎉 ${over} above target — keep going, it all counts!`;
+      msg.style.color = pctTrue >= 100 ? 'var(--green)' : 'var(--accent-blue)';
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
       e.preventDefault();
       signOut();
     });
-
-    let callsUpdatedAt = null;
 
     async function loadCallsToday() {
       const today = new Date().toISOString().slice(0, 10);
@@ -358,6 +378,7 @@
       }
       document.getElementById('calls-amount').value = '1';
       await loadCallsToday();
+      showToast(`<strong>✅ Calls updated</strong><div style="margin-top:4px;">+${amount} logged — ${todayCalls} today.</div>`, { color: 'var(--green)' });
     });
 
     async function loadMiniLeaderboard() {
@@ -390,14 +411,6 @@
         tbody.innerHTML = '<tr><td colspan="3" class="hint">No data yet.</td></tr>';
       }
     }
-
-    const MOODS = [
-      { key: 'great', label: '😄 Great' },
-      { key: 'good', label: '🙂 Good' },
-      { key: 'okay', label: '😐 Okay' },
-      { key: 'stressed', label: '😣 Stressed' },
-      { key: 'overwhelmed', label: '🥵 Overwhelmed' },
-    ];
 
     function renderMoodPicker() {
       const wrap = document.getElementById('mood-picker');
