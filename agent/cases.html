@@ -31,11 +31,11 @@
         <div class="toolbar">
           <h2 style="margin:0;">Cases</h2>
           <div style="display:flex; gap:8px;">
-            <button class="btn secondary" id="quick-case-btn">+ Quick case</button>
-            <button class="btn" id="new-case-btn">+ New case</button>
+            <button class="btn secondary" id="quick-case-btn">+ Quick case submission</button>
+            <button class="btn" id="new-case-btn">+ Case submission</button>
           </div>
         </div>
-        <p class="hint" style="margin-top:-8px;">Tip: press <kbd>n</kbd> for a new case, <kbd>/</kbd> to search. Escalated cases can be actioned and closed by anyone on the team.</p>
+        <p class="hint" style="margin-top:-8px;">Tip: press <kbd>n</kbd> for a case submission, <kbd>/</kbd> to search. Escalated cases can be actioned and closed by anyone on the team.</p>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
           <input id="search-input" placeholder="Search case #, account #, customer, or note text…" style="flex:2; min-width:220px;" />
           <select id="mine-filter" style="flex:1; min-width:140px;">
@@ -59,12 +59,22 @@
           <tbody></tbody>
         </table>
       </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 4px;">📋 My submission history</h3>
+        <p class="hint" style="margin:0 0 10px;">Every case you've submitted — quick or full — so you can always come back and review or revisit one.</p>
+        <table id="submission-history-table">
+          <thead><tr><th>Case #</th><th>Type</th><th>Status</th><th>Submitted</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </main>
   </div>
 
   <div class="modal-backdrop hidden" id="modal-backdrop">
     <div class="modal">
-      <h3>New case</h3>
+      <h3>Case submission</h3>
+      <p class="hint" style="margin-top:-6px;">Record a case that already exists in Salesforce, with the full details.</p>
       <form id="new-case-form">
         <div class="form-row">
           <label>Case number</label>
@@ -98,7 +108,7 @@
         <p class="error-text hidden" id="nc-error"></p>
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="nc-cancel">Cancel</button>
-          <button type="submit" class="btn" id="nc-save">Create case</button>
+          <button type="submit" class="btn" id="nc-save">Submit case</button>
         </div>
       </form>
     </div>
@@ -106,8 +116,8 @@
 
   <div class="modal-backdrop hidden" id="quick-modal-backdrop">
     <div class="modal">
-      <h3>Quick case</h3>
-      <p class="hint" style="margin-top:-6px;">Just record it — case number and type only. Fill in the rest later from the case page.</p>
+      <h3>Quick case submission</h3>
+      <p class="hint" style="margin-top:-6px;">Case number and type only — it's already resolved in Salesforce, so this submits <em>and closes</em> it in one step. No need to create it, then find it, then close it.</p>
       <form id="quick-case-form">
         <div class="form-row"><label>Case number</label><input id="qc-case-number" required /></div>
         <div class="form-row">
@@ -117,7 +127,7 @@
         <p class="error-text hidden" id="qc-error"></p>
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="qc-cancel">Cancel</button>
-          <button type="submit" class="btn" id="qc-save">Create case</button>
+          <button type="submit" class="btn" id="qc-save">Add and submit case</button>
         </div>
       </form>
     </div>
@@ -141,7 +151,15 @@
     if (profile) {
       subscribeToNotifications(profile.id);
       await loadCaseTypes();
-      await loadCases();
+      await Promise.all([loadCases(), loadSubmissionHistory()]);
+    }
+
+    function showToast(html, { color = 'var(--green)', ms = 4000 } = {}) {
+      const toast = document.createElement('div');
+      toast.style.cssText = `position:fixed; bottom:20px; right:20px; z-index:100; background:var(--white); box-shadow:var(--shadow); border-left:4px solid ${color}; border-radius:8px; padding:14px 18px; max-width:320px;`;
+      toast.innerHTML = html;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), ms);
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
@@ -253,6 +271,43 @@
       }
     }
 
+    async function loadSubmissionHistory() {
+      const { data, error } = await supabase
+        .from('cases')
+        .select('id, case_number, status, created_at, case_types(name)')
+        .eq('assigned_to', profile.id)
+        .in('source', ['manual', 'quick_submission'])
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      const tbody = document.querySelector('#submission-history-table tbody');
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="4" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="hint">Nothing submitted yet.</td></tr>';
+        return;
+      }
+
+      for (const c of data) {
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.innerHTML = `
+          <td>${c.case_number}</td>
+          <td>${c.case_types?.name || '—'}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td class="hint">${new Date(c.created_at).toLocaleString()}</td>
+        `;
+        tr.addEventListener('click', () => {
+          window.location.href = `/agent/case.html?id=${c.id}`;
+        });
+        tbody.appendChild(tr);
+      }
+    }
+
     const modal = document.getElementById('modal-backdrop');
     document.getElementById('new-case-btn').addEventListener('click', () => modal.classList.remove('hidden'));
     document.getElementById('nc-cancel').addEventListener('click', () => modal.classList.add('hidden'));
@@ -310,7 +365,8 @@
 
       modal.classList.add('hidden');
       document.getElementById('new-case-form').reset();
-      await loadCases();
+      await Promise.all([loadCases(), loadSubmissionHistory()]);
+      showToast('<strong>✅ Case submitted</strong>');
     });
 
     const quickModal = document.getElementById('quick-modal-backdrop');
@@ -323,27 +379,40 @@
       errorEl.classList.add('hidden');
       const saveBtn = document.getElementById('qc-save');
       saveBtn.disabled = true;
+      const caseNumber = document.getElementById('qc-case-number').value.trim();
 
-      const { error } = await supabase.from('cases').insert({
-        case_number: document.getElementById('qc-case-number').value.trim(),
+      const { data: created, error: insertError } = await supabase.from('cases').insert({
+        case_number: caseNumber,
         case_type_id: document.getElementById('qc-case-type').value || null,
         priority: 'normal',
         assigned_to: profile.id,
         status: 'new',
-        source: 'manual',
-      });
+        source: 'quick_submission',
+      }).select('id').single();
 
-      saveBtn.disabled = false;
-
-      if (error) {
-        errorEl.textContent = caseInsertErrorMessage(error);
+      if (insertError) {
+        saveBtn.disabled = false;
+        errorEl.textContent = caseInsertErrorMessage(insertError);
         errorEl.classList.remove('hidden');
         return;
       }
 
+      // Quick submissions are already resolved in Salesforce — close it in the
+      // same action (a status UPDATE, not just the insert) so the case-status
+      // trigger correctly stamps closed_at/closed_by and counts it toward
+      // stats immediately. Agents submit and close once, not create-then-close.
+      const { error: closeError } = await supabase.from('cases').update({ status: 'closed' }).eq('id', created.id);
+
+      saveBtn.disabled = false;
       quickModal.classList.add('hidden');
       document.getElementById('quick-case-form').reset();
-      await loadCases();
+      await Promise.all([loadCases(), loadSubmissionHistory()]);
+
+      if (closeError) {
+        showToast(`<strong>⚠ Case ${caseNumber} submitted but not closed</strong><div style="margin-top:4px;">${closeError.message} — close it from the case page.</div>`, { color: 'var(--orange)', ms: 7000 });
+        return;
+      }
+      showToast(`<strong>✅ Case ${caseNumber} submitted and closed</strong>`);
     });
   </script>
 </body>

@@ -1365,3 +1365,39 @@ block. The bug itself, though, was a reminder that RLS/SQL-level verification (t
 project has otherwise followed carefully) doesn't catch client-side JavaScript errors — only
 actually loading the page does. Added a page-error scanner (headless browser + mocked
 `supabase`/`auth` modules) as a repeatable check for this specific failure class going forward.
+
+---
+
+📥 v23 Update – "Submission," not "creation" (2026-07-12)
+
+User correction on terminology and workflow, following straight on from v22: agents aren't
+*creating* cases in CulliganConnect — the cases already exist in Salesforce. This tool is where
+they *submit* a record of one (and, for quick submissions, close it out) for tracking and stats.
+The UI language and the Quick Case flow didn't match that mental model.
+
+**Renamed** (`agent/cases.html`, cosmetic only, no schema/behavior change to the full form):
+· "+ New case" → **"+ Case submission"**; modal title "New case" → "Case submission"; submit
+  button "Create case" → "Submit case".
+· "+ Quick case" → **"+ Quick case submission"**; modal title "Quick case" → "Quick case
+  submission".
+
+**Quick case submission now submits *and* closes in one action** — the whole point raised: the
+case is already resolved in Salesforce, so there's no reason to make an agent create it, go find
+it in the list, open it, and close it as three separate steps. The submit button now reads "Add
+and submit case" and the handler does two writes behind that one click: `insert` (status `new`,
+`source: 'quick_submission'`) immediately followed by `update` (status → `closed`) on the same row.
+Deliberately two writes rather than inserting straight in as `closed` — `handle_case_status_change()`
+(the trigger that stamps `closed_at`/`closed_by` and drops the activity-feed event) only fires on
+`UPDATE`, not `INSERT`, so going through the update path reuses the exact same trigger logic every
+other close in the app goes through, rather than duplicating it. Verified under a simulated
+authenticated session that `closed_at`/`closed_by` land correctly on the quick-submission path,
+same as a normal close. The regular "Case submission" form is unchanged functionally — it still
+just submits at `status: new`, since the user scoped the create+close behavior to quick submissions
+only. Added a friendlier error if the close half fails after a successful insert (case still
+exists, just needs closing manually from the case page) rather than losing the submission.
+
+**"📋 My submission history"** — new card on the Cases page, always visible below the main table:
+every case the signed-in agent has submitted (`assigned_to = me`, `source in ('manual',
+'quick_submission')`), most recent first, case #/type/status/submitted-at, click through to the
+full case. Exists so an agent can always get back to something they logged, without fighting the
+main table's filters (which default to "My cases" but reset on every status/type change).
