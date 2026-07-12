@@ -1401,3 +1401,43 @@ every case the signed-in agent has submitted (`assigned_to = me`, `source in ('m
 'quick_submission')`), most recent first, case #/type/status/submitted-at, click through to the
 full case. Exists so an agent can always get back to something they logged, without fighting the
 main table's filters (which default to "My cases" but reset on every status/type change).
+
+---
+
+🗄️ v24 Update – Stale browser cache masquerading as bugs (2026-07-12)
+
+User reported three things broken from the live site: "Add note" does nothing, the template
+"Use" button does nothing, and case numbers aren't searchable. Investigated each independently
+before touching any code, since two of the three (Add note, and by code-path overlap likely Use)
+sounded exactly like the v22 `myQuickNotes` crash — already fixed and merged — which raised the
+question of whether this was a *new* bug or the *same* bug on a browser that hadn't picked up the
+fix yet.
+
+**Verified all three against the current, already-merged code — all work correctly:**
+· "Add note" — headless-browser click-test (mocked auth/Supabase) confirms the modal opens and the
+  `quick_notes` insert fires with the right payload; also re-confirmed under a real, RLS-simulated
+  session.
+· Template "Use" button — same click-test approach, this time seeding a real template row into
+  the mock (the earlier v22 sweep used an all-empty mock, which meant `renderTemplateCard()` and
+  everything inside it, including the Use button's own `addEventListener`, never actually executed
+  during that scan — a blind spot in the test, not evidence the code was fine). With a seeded
+  template, the button correctly opens the modal, detects `[PLACEHOLDER]`/`{TOKEN}` fields, and
+  renders a live preview.
+· Case number search — already implemented on both `agent/cases.html` and `admin/cases.html`
+  (`case_number.ilike.%search%` is part of the existing `.or()` filter on both pages). Verified
+  directly against real data under a simulated agent session: searching a substring of a real case
+  number returns the right row.
+
+**Conclusion: this is a caching problem, not a code problem.** The site has no build step and no
+hashed/versioned filenames for its JS — `/js/*.js` and every `/agent/*.html` / `/admin/*.html` are
+served at the same URL forever, and nothing in the deploy previously told the browser it *couldn't*
+just keep using whatever copy it fetched last time. A phone that loaded the app once before the
+v22/v23 fixes shipped had every reason to keep serving that same cached, broken JS indefinitely —
+explaining why an already-fixed bug kept being reported as still-broken.
+
+**Fix:** added `vercel.json` with `Cache-Control: no-cache, must-revalidate` on every path. This
+doesn't disable caching (unchanged files still skip the download via a 304), it just forces the
+browser to check in with the server on every load before trusting a cached copy — so a fix shipped
+today is live for every user's next page load, not whenever their local cache happens to expire.
+This is the first deploy-config change made in the project; previously the site relied entirely on
+Vercel's platform defaults for static-file caching.
