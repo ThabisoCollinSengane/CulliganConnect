@@ -295,6 +295,8 @@
         errorEl.classList.remove('hidden');
         return;
       }
+      // Clear the temporary onboarding password so it stops showing to admins.
+      await supabase.from('agent_onboarding').delete().eq('profile_id', profile.id);
       document.getElementById('password-form').reset();
       successEl.classList.remove('hidden');
     });

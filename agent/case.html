@@ -174,24 +174,15 @@
     import { statusBadge, escalationCountdown, fillTemplate, copyToClipboard } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
 
-    const profile = await requireRole(['agent', 'admin']);
+    // profile is loaded at the very bottom, AFTER every button handler is
+    // registered. If we awaited requireRole()/loadCase() up here, the module's
+    // top-level await would suspend evaluation and the Save/Assign/Close
+    // handlers further down would never bind — the buttons would do nothing.
+    let profile = null;
     const caseId = new URLSearchParams(window.location.search).get('id');
     let currentCase = null;
     let escalationTemplate = null;
     let serviceCentre = null;
-
-    if (!caseId) {
-      document.getElementById('case-title').textContent = 'No case specified.';
-    } else if (profile) {
-      subscribeToNotifications(profile.id);
-      await loadLookups();
-      await loadCase();
-      await loadNotes();
-      await loadReminders();
-      await loadHistory();
-      await loadAttachments();
-      initNoteDraft();
-    }
 
     // ---- Note draft autosave (localStorage, not the database — a draft isn't a saved note) ----
     const draftKey = `culligan-draft-note-${caseId}`;
@@ -712,6 +703,21 @@
         div.innerHTML = `<span class="hint">${new Date(h.changed_at).toLocaleString()}</span> — ${h.profiles?.full_name || 'System'}: ${statusBadge(h.old_status || 'new')} → ${statusBadge(h.new_status)}`;
         list.appendChild(div);
       }
+    }
+
+    // ---- Init (runs last, so all handlers above are already bound) ----
+    profile = await requireRole(['agent', 'admin']);
+    if (!caseId) {
+      document.getElementById('case-title').textContent = 'No case specified.';
+    } else if (profile) {
+      subscribeToNotifications(profile.id);
+      await loadLookups();
+      await loadCase();
+      await loadNotes();
+      await loadReminders();
+      await loadHistory();
+      await loadAttachments();
+      initNoteDraft();
     }
   </script>
 </body>

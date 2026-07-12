@@ -35,6 +35,19 @@
     <main class="main">
       <div class="card">
         <div class="toolbar">
+          <h2 style="margin:0;">Teams</h2>
+        </div>
+        <p class="hint" style="margin-top:-8px;">Create a team to group your agents. Assign each agent to a team in the table below.</p>
+        <form id="team-form" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin:12px 0;">
+          <div style="flex:1; min-width:220px;"><label style="margin-top:0;">Team name</label><input id="team-name" placeholder="e.g. Thabiso's Team" required /></div>
+          <button class="btn" type="submit">Create team</button>
+        </form>
+        <p class="error-text hidden" id="team-error"></p>
+        <div id="teams-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
           <h2 style="margin:0;">Agents</h2>
           <div style="display:flex; gap:10px;">
             <button class="btn secondary" id="team-target-btn">Set team target</button>
@@ -43,7 +56,7 @@
         </div>
         <table id="agents-table">
           <thead>
-            <tr><th>Name</th><th>Email</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr>
+            <tr><th>Name</th><th>Email</th><th>Team</th><th>Department</th><th>Role</th><th>Temp password</th><th>Status</th><th></th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -71,6 +84,10 @@
         <div class="form-row">
           <label for="department">Department</label>
           <select id="department"></select>
+        </div>
+        <div class="form-row">
+          <label for="new-team">Team</label>
+          <select id="new-team"></select>
         </div>
         <div class="form-row">
           <label for="role">Role</label>
@@ -126,9 +143,11 @@
     import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['admin']);
+    let teams = [];
     if (profile) {
       subscribeToNotifications(profile.id);
       await loadDepartments();
+      await loadTeams();
       await loadAgents();
     }
 
@@ -148,22 +167,70 @@
         (data || []).map(d => `<option value="${d.id}">${d.name}</option>`).join('');
     }
 
+    // ---- Teams ----
+    function teamOptions(selectedId) {
+      return '<option value="">— none —</option>' +
+        teams.map(t => `<option value="${t.id}" ${t.id === selectedId ? 'selected' : ''}>${t.name}</option>`).join('');
+    }
+
+    async function loadTeams() {
+      const { data, error } = await supabase.from('teams').select('id, name').eq('is_active', true).order('name');
+      teams = data || [];
+      document.getElementById('new-team').innerHTML = teamOptions(null);
+
+      const list = document.getElementById('teams-list');
+      if (error) { list.innerHTML = `<p class="error-text">${error.message}</p>`; return; }
+      if (teams.length === 0) { list.innerHTML = '<p class="hint">No teams yet.</p>'; return; }
+
+      list.innerHTML = '';
+      for (const t of teams) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border);';
+        row.innerHTML = `<span>${t.name}</span><button class="btn secondary del-team-btn" data-id="${t.id}" style="padding:4px 12px;">Delete</button>`;
+        row.querySelector('.del-team-btn').addEventListener('click', async () => {
+          if (!confirm(`Delete team "${t.name}"? Agents in it will become unassigned.`)) return;
+          const { error: delErr } = await supabase.from('teams').delete().eq('id', t.id);
+          if (delErr) { alert(delErr.message); return; }
+          await loadTeams();
+          await loadAgents();
+        });
+        list.appendChild(row);
+      }
+    }
+
+    document.getElementById('team-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('team-error');
+      errorEl.classList.add('hidden');
+      const name = document.getElementById('team-name').value.trim();
+      if (!name) return;
+
+      const { error } = await supabase.from('teams').insert({ name, team_leader_id: profile.id });
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      document.getElementById('team-form').reset();
+      await loadTeams();
+    });
+
     async function loadAgents() {
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, email, role, is_active, departments(name)')
+        .select('id, full_name, email, role, is_active, team_id, departments(name), agent_onboarding(temp_password)')
         .order('full_name');
 
       const tbody = document.querySelector('#agents-table tbody');
       tbody.innerHTML = '';
 
       if (error) {
-        tbody.innerHTML = `<tr><td colspan="6" class="error-text">${error.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="error-text">${error.message}</td></tr>`;
         return;
       }
 
       if (!data || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="hint">No agents yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="hint">No agents yet.</td></tr>';
         return;
       }
 
@@ -172,19 +239,46 @@
         const statusBadge = u.is_active
           ? '<span class="badge green">Active</span>'
           : '<span class="badge grey">Disabled</span>';
+        // agent_onboarding embeds as an array (or object) depending on PostgREST; normalise.
+        const onboarding = Array.isArray(u.agent_onboarding) ? u.agent_onboarding[0] : u.agent_onboarding;
+        const tempPw = onboarding?.temp_password;
+        const tempCell = tempPw
+          ? `<code style="font-size:0.85rem;">${tempPw}</code> <button class="btn secondary copy-pw-btn" data-pw="${tempPw}" style="padding:2px 8px;">Copy</button>`
+          : '<span class="hint">— changed —</span>';
         tr.innerHTML = `
           <td>${u.full_name || '—'}</td>
           <td>${u.email}</td>
+          <td><select class="team-select" data-id="${u.id}" style="min-width:140px;">${teamOptions(u.team_id)}</select></td>
           <td>${u.departments?.name || '—'}</td>
           <td><span class="badge blue">${u.role}</span></td>
+          <td>${tempCell}</td>
           <td>${statusBadge}</td>
-          <td>
+          <td style="white-space:nowrap;">
             <button class="btn secondary toggle-btn" data-id="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Disable' : 'Enable'}</button>
             <button class="btn secondary target-btn" data-id="${u.id}" data-name="${u.full_name}">Target</button>
           </td>
         `;
         tbody.appendChild(tr);
       }
+
+      tbody.querySelectorAll('.team-select').forEach(sel => {
+        sel.addEventListener('change', async () => {
+          const { error: upErr } = await supabase.from('profiles')
+            .update({ team_id: sel.value || null }).eq('id', sel.dataset.id);
+          if (upErr) { alert(upErr.message); await loadAgents(); }
+        });
+      });
+
+      tbody.querySelectorAll('.copy-pw-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.pw);
+            const original = btn.textContent;
+            btn.textContent = '✓';
+            setTimeout(() => { btn.textContent = original; }, 1200);
+          } catch { alert(btn.dataset.pw); }
+        });
+      });
 
       tbody.querySelectorAll('.toggle-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -252,6 +346,7 @@
         email: document.getElementById('new-email').value.trim(),
         password: document.getElementById('new-password').value,
         department_id: document.getElementById('department').value || null,
+        team_id: document.getElementById('new-team').value || null,
         role: document.getElementById('role').value,
       };
 

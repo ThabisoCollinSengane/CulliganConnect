@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
   }
 
   const body = await req.json().catch(() => ({}));
-  const { full_name, email, password, department_id, role } = body;
+  const { full_name, email, password, department_id, role, team_id } = body;
 
   if (!full_name || !email || !password || String(password).length < 8) {
     return json({ error: "full_name, email and a password (8+ chars) are required" }, 400);
@@ -81,6 +81,7 @@ Deno.serve(async (req) => {
     full_name,
     role: role || "agent",
     department_id: department_id || null,
+    team_id: team_id || null,
     is_active: true,
   });
 
@@ -89,6 +90,13 @@ Deno.serve(async (req) => {
     await adminClient.auth.admin.deleteUser(created.user.id);
     return json({ error: insertError.message }, 400);
   }
+
+  // Record the temporary password so the admin can see it until the agent
+  // changes their own (the row is deleted on first self-service password change).
+  await adminClient.from("agent_onboarding").insert({
+    profile_id: created.user.id,
+    temp_password: password,
+  });
 
   await adminClient.from("audit_log").insert({
     actor_id: caller.id,

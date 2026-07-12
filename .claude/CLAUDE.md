@@ -1042,3 +1042,41 @@ back-patched the v9/v11 migration files so a fresh deploy is secure too. (The ol
 they predate the create-time re-grant, hence the discrepancy.) **Lesson for future
 security-definer functions: always `revoke execute from public, anon, authenticated`, never just
 `from public`, and verify with `has_function_privilege`.**
+
+---
+
+👥 v15 Update – Real roster, temp-password visibility, teams, close-case bug fix (2026-07-11)
+
+· **Close-case (and Save/Assign) did nothing — real bug**: `agent/case.html` is a
+  `<script type="module">` that did `const profile = await requireRole(...)` and six more
+  sequential `await`s (loadLookups→…→loadAttachments) at the *top* of the module, BEFORE the
+  Save/Assign/Close `addEventListener` lines further down. Top-level await suspends module
+  evaluation, so on a slow mobile load — or if any of those queries threw — the button handlers
+  never bound and every button was dead. Fixed by declaring `let profile = null;` up top and
+  moving the whole `requireRole` + init sequence to the very end of the script, after all
+  handlers are registered. (Same await-before-handlers shape exists on a couple of other pages
+  but with far fewer/safer awaits; left as-is.)
+
+· **Real agent roster created**: the Excel "Setup" sheet lists 15 named agents (rows 2–16); rows
+  17–31 are literal "Agent 16"–"Agent 30" placeholders the sheet tells you to replace, so they
+  are NOT real people and were not created. Mbali Matusse and Thabiso Sengane already existed →
+  13 new agents bulk-created via SQL (raw `auth.users` insert with `crypt(pw, gen_salt('bf'))`
+  bcrypt — verified a login hash matches — plus `profiles` + `agent_onboarding`; all the
+  GoTrue empty-string token columns set, email pre-confirmed). Emails follow
+  `firstname.lastname@culligan.net`. The roster INSERT is live-only, NOT a committed migration
+  (it touches auth.users and is environment-specific).
+
+· **Temp-password visibility** (`agent_onboarding` table, `20260711200000_teams_and_agent_onboarding.sql`):
+  stores the onboarding password so admins can see/copy it on `admin/users.html` (new "Temp
+  password" column) until the agent changes it. RLS: admins read/write, owner can read+delete
+  their own. `agent/settings.html`'s change-password flow now deletes the row on success, so the
+  column flips to "— changed —". The `create-agent` edge function (v2) also records the temp
+  password now, so future agents show up too. **Security note (deliberate tradeoff):** this is
+  admin-visible plaintext, justified only because it's an internal onboarding tool and the temp
+  password is single-use until first change. Not for any long-lived secret.
+
+· **Simple teams** (same migration): `teams` table + `profiles.team_id`. Team leaders (admins)
+  create a team by name and assign agents via a per-row dropdown on `admin/users.html`. Not a
+  permissions boundary — just a grouping label to separate each team leader's people, per the
+  user's request ("no need to create a group, just a simple team"). RLS: authenticated read,
+  admins write. The previously non-functional "create team" expectation is now real.
