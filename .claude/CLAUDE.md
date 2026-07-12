@@ -1128,3 +1128,20 @@ matching department (seeded in `20260711210000_salesforce_import_routing.sql`) a
 among that department's agents; unknown types or empty departments fall back to all agents. Case
 type is also matched to our `case_types` (first-word match) for `case_type_id`. Salesforce case #
 now shows on the case detail page. Verified insert live (rolled back).
+
+---
+
+📞 v17 Update – Calls as their own tracked category (2026-07-11)
+
+· Calls were already logged (`call_logs`) and folded into the daily-target meter; this makes them
+  a distinct, visible category on both dashboards without double-counting (meter still = closed +
+  calls; calls also shown on their own).
+· **Agent dashboard** (`agent/index.html`): the "📞 Calls today" card now shows "Last updated HH:MM"
+  and an orange nudge ("Time to update your call count") when it's been over ~2 hours since the
+  last update (or not updated today). Re-checked every 5 min via setInterval, and refreshed after
+  each update. Button relabelled "Update calls". This gives the ~2h/4h update cadence the user
+  asked for, client-side (no server cron / timezone guesswork).
+· **Admin dashboard** (`admin/index.html`): new "📞 Calls today" card — overall team total plus a
+  per-agent table (agent · calls · last-updated), sorted by calls. Reads `call_logs` for today
+  (admin RLS `admins_all_call_logs`), embed via `call_logs.agent_id → profiles`. No schema change
+  (`call_logs.updated_at` already existed).
