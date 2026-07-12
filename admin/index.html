@@ -68,6 +68,18 @@
       </div>
 
       <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">📞 Calls today</h3>
+          <div class="value" id="calls-total" style="font-size:2rem; color:var(--primary-blue);">0</div>
+        </div>
+        <p class="hint" style="margin:0 0 8px;">Self-reported by agents through the day. Counts toward each agent's closed-interactions target, shown here as its own tally.</p>
+        <table id="calls-table">
+          <thead><tr><th>Agent</th><th>Calls</th><th>Last updated</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
         <h3 style="margin:0 0 4px;">💙 Team morale (last 7 days)</h3>
         <p class="hint" style="margin:0 0 10px;">From the daily mood check-in on agents' dashboards. Sustained stress gets flagged below.</p>
         <div id="mood-bars"></div>
@@ -98,7 +110,41 @@
       teamMotivationalLine(supabase).then(line => {
         document.getElementById('welcome-motivation').textContent = line;
       });
-      await Promise.all([loadStats(), loadMoodInsights(), loadNotifications()]);
+      await Promise.all([loadStats(), loadMoodInsights(), loadNotifications(), loadCallsInsights()]);
+    }
+
+    async function loadCallsInsights() {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('call_logs')
+        .select('calls_taken, updated_at, profiles(full_name)')
+        .eq('call_date', today)
+        .order('calls_taken', { ascending: false });
+
+      const tbody = document.querySelector('#calls-table tbody');
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="3" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+
+      const total = (data || []).reduce((s, r) => s + (r.calls_taken || 0), 0);
+      document.getElementById('calls-total').textContent = total;
+
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="hint">No calls logged yet today.</td></tr>';
+        return;
+      }
+
+      for (const r of data) {
+        const when = r.updated_at
+          ? new Date(r.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '—';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${r.profiles?.full_name || 'Unknown'}</td><td>${r.calls_taken}</td><td class="hint">${when}</td>`;
+        tbody.appendChild(tr);
+      }
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {

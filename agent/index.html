@@ -65,16 +65,18 @@
         <div id="due-reminders-list"></div>
       </div>
 
-      <div class="card">
+      <div class="card" id="calls-card">
         <div class="toolbar">
           <h3 style="margin:0;">📞 Calls today</h3>
           <div style="display:flex; gap:8px; align-items:center;">
             <input type="number" id="calls-amount" min="1" step="1" value="1" style="width:90px;" />
-            <button class="btn" id="add-call-btn">Add</button>
+            <button class="btn" id="add-call-btn">Update calls</button>
           </div>
         </div>
         <div class="value" id="calls-today" style="font-size:2rem; color:var(--primary-blue);">0</div>
-        <p class="hint">Log calls as you take them — one at a time, or type a number to add a batch after a busy spell. Calls count toward your daily target and team stats.</p>
+        <p class="hint" id="calls-updated"></p>
+        <p class="hidden" id="calls-nudge" style="margin:8px 0 0; font-weight:600; color:var(--orange);">⏰ Time to update your call count — please refresh it every couple of hours.</p>
+        <p class="hint" style="margin-top:6px;">A separate tally from cases. Calls also count toward your daily target of closed interactions.</p>
       </div>
 
       <div class="card">
@@ -258,14 +260,31 @@
       signOut();
     });
 
+    let callsUpdatedAt = null;
+
     async function loadCallsToday() {
       const today = new Date().toISOString().slice(0, 10);
-      const { data } = await supabase.from('call_logs').select('calls_taken')
+      const { data } = await supabase.from('call_logs').select('calls_taken, updated_at')
         .eq('agent_id', profile.id).eq('call_date', today).maybeSingle();
       todayCalls = data?.calls_taken ?? 0;
+      callsUpdatedAt = data?.updated_at ? new Date(data.updated_at) : null;
       document.getElementById('calls-today').textContent = todayCalls;
+      document.getElementById('calls-updated').textContent = callsUpdatedAt
+        ? `Last updated ${callsUpdatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
+        : 'Not updated yet today.';
+      refreshCallsNudge();
       updateMeter();
     }
+
+    // Nudge agents to keep their call count fresh — prompts once it's been
+    // over ~2 hours (or never today). Re-checked every 5 minutes while open.
+    function refreshCallsNudge() {
+      const nudge = document.getElementById('calls-nudge');
+      const twoHoursMs = 2 * 60 * 60 * 1000;
+      const stale = !callsUpdatedAt || (Date.now() - callsUpdatedAt.getTime()) > twoHoursMs;
+      nudge.classList.toggle('hidden', !stale);
+    }
+    setInterval(refreshCallsNudge, 5 * 60 * 1000);
 
     document.getElementById('add-call-btn').addEventListener('click', async () => {
       const amount = parseInt(document.getElementById('calls-amount').value, 10);
