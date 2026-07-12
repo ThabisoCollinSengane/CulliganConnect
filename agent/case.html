@@ -87,7 +87,11 @@
           <button class="btn secondary hidden" id="assign-me-btn">🙋 Assign to me</button>
         </div>
         <p class="hint" id="close-hint" style="margin-top:8px;">Closing an escalated case ends its SLA timer and counts toward your daily target.</p>
+        <p class="success-text hidden" id="status-success"></p>
         <p class="error-text hidden" id="status-error"></p>
+        <div class="hidden" id="closed-banner" style="margin-top:12px; background:var(--light-blue); border-left:4px solid var(--green); border-radius:6px; padding:10px 14px;">
+          <strong>✅ This case is closed.</strong> <span id="closed-banner-detail" class="hint"></span>
+        </div>
       </div>
 
       <div class="card hidden" id="template-card">
@@ -243,7 +247,7 @@
     async function loadCase() {
       const { data, error } = await supabase
         .from('cases')
-        .select('*, case_types(name), service_centres(id, code, name, depot_email, cc_contacts), escalation_reasons(id, name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
+        .select('*, case_types(name), service_centres(id, code, name, depot_email, cc_contacts), escalation_reasons(id, name), assigned_agent:profiles!cases_assigned_to_fkey(full_name), closed_by_agent:profiles!cases_closed_by_fkey(full_name)')
         .eq('id', caseId)
         .single();
 
@@ -282,6 +286,7 @@
         ['Times escalated', currentCase.times_escalated],
         ['Service centre', currentCase.service_centres?.name],
         ['Assigned to', currentCase.assigned_agent?.full_name],
+        ['Closed at', currentCase.closed_at ? new Date(currentCase.closed_at).toLocaleString() : null],
       ];
       grid.innerHTML = rows.map(([label, value]) =>
         `<div><div class="hint">${label}</div><div>${value || '—'}</div></div>`
@@ -289,22 +294,45 @@
     }
 
     function renderStatusForm() {
-      document.getElementById('assign-me-btn').classList.toggle('hidden', currentCase.assigned_to === profile.id);
+      const isClosed = currentCase.status === 'closed' || currentCase.status === 'resolved';
+
+      document.getElementById('assign-me-btn').classList.toggle('hidden', currentCase.assigned_to === profile.id || isClosed);
       document.getElementById('status-select').value = currentCase.status;
       document.getElementById('escalation-fields').classList.toggle('hidden', currentCase.status !== 'escalated');
       if (currentCase.escalation_reason_id) document.getElementById('escalation-reason').value = currentCase.escalation_reason_id;
       if (currentCase.service_centre_id) document.getElementById('service-centre').value = currentCase.service_centre_id;
       if (currentCase.escalation_timer_hours) document.getElementById('escalation-timer').value = String(currentCase.escalation_timer_hours);
       if (currentCase.callback_arranged) document.getElementById('callback-arranged').value = currentCase.callback_arranged;
+
+      // A closed case is done — make that unmistakable instead of leaving the
+      // same editable form and Close button sitting there looking untouched.
+      document.getElementById('close-hint').classList.toggle('hidden', isClosed);
+      document.getElementById('close-case-btn').classList.toggle('hidden', isClosed);
+      document.getElementById('closed-banner').classList.toggle('hidden', !isClosed);
+      if (isClosed) {
+        const when = currentCase.closed_at ? new Date(currentCase.closed_at).toLocaleString() : '';
+        const who = currentCase.closed_by_agent?.full_name || '';
+        document.getElementById('closed-banner-detail').textContent =
+          [who && `Closed by ${who}`, when].filter(Boolean).join(' · ');
+      }
     }
 
     document.getElementById('status-select').addEventListener('change', (e) => {
       document.getElementById('escalation-fields').classList.toggle('hidden', e.target.value !== 'escalated');
     });
 
+    function showStatusSuccess(text) {
+      const el = document.getElementById('status-success');
+      el.textContent = text;
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), 4000);
+    }
+
     document.getElementById('save-status-btn').addEventListener('click', async () => {
       const errorEl = document.getElementById('status-error');
+      const successEl = document.getElementById('status-success');
       errorEl.classList.add('hidden');
+      successEl.classList.add('hidden');
 
       const status = document.getElementById('status-select').value;
       const update = { status };
@@ -329,6 +357,7 @@
       }
       await loadCase();
       await loadHistory();
+      showStatusSuccess('Saved.');
     });
 
     document.getElementById('assign-me-btn').addEventListener('click', async () => {
@@ -348,10 +377,12 @@
         return;
       }
       await loadCase();
+      showStatusSuccess('Assigned to you.');
     });
 
     document.getElementById('close-case-btn').addEventListener('click', async () => {
       if (!currentCase) return;
+      if (currentCase.status === 'closed' || currentCase.status === 'resolved') return;
       if (!confirm(`Close case ${currentCase.case_number}? This ends any escalation timer.`)) return;
 
       const errorEl = document.getElementById('status-error');
@@ -371,6 +402,7 @@
       }
       await loadCase();
       await loadHistory();
+      showStatusSuccess('Case closed.');
     });
 
     async function renderTemplateCard() {
