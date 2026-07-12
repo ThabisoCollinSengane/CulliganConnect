@@ -51,12 +51,26 @@
       <div id="own-templates-list"></div>
 
       <div class="card">
-        <div class="toolbar">
-          <h2 style="margin:0;">📝 Notepad</h2>
-          <button class="btn" id="new-note-btn">+ New note</button>
-        </div>
-        <p class="hint">Quick personal notes — not tied to any case.</p>
-        <div id="quick-notes-list" style="margin-top:12px;"></div>
+        <h2 style="margin:0 0 4px;">📝 Notepad</h2>
+        <p class="hint" style="margin:0 0 12px;">Quick personal notes — not tied to any case.</p>
+        <form id="note-form">
+          <input type="hidden" id="qn-id" />
+          <textarea id="qn-text" rows="3" placeholder="Add a note…" required style="font-family: ui-monospace, monospace;"></textarea>
+          <p class="hint" style="margin:10px 0 0;">Customer details (optional) — copy them in one click when a reminder comes due.</p>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 14px;">
+            <div class="form-row"><label>Customer name</label><input id="qn-customer" /></div>
+            <div class="form-row"><label>Business name</label><input id="qn-business" /></div>
+            <div class="form-row"><label>Phone number</label><input id="qn-phone" /></div>
+            <div class="form-row"><label>Email</label><input id="qn-email" type="email" /></div>
+            <div class="form-row"><label>Account number</label><input id="qn-account" /></div>
+            <div class="form-row"><label>Task number</label><input id="qn-task" /></div>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center; margin-top:14px;">
+            <button type="submit" class="btn" id="qn-save">Save note</button>
+            <button type="button" class="btn secondary hidden" id="qn-cancel-edit">Cancel edit</button>
+          </div>
+        </form>
+        <div id="quick-notes-list" style="margin-top:16px;"></div>
       </div>
 
       <div class="card">
@@ -133,29 +147,6 @@
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="esc-use-close">Close</button>
       </div>
-    </div>
-  </div>
-
-  <div class="modal-backdrop hidden" id="note-modal-backdrop">
-    <div class="modal" style="max-width:560px;">
-      <h3 id="note-modal-title">New note</h3>
-      <form id="note-form">
-        <input type="hidden" id="qn-id" />
-        <textarea id="qn-text" rows="6" placeholder="Write a note…" required style="font-family: ui-monospace, monospace;"></textarea>
-        <p class="hint" style="margin:10px 0 0;">Customer details (optional) — copy them in one click when a reminder comes due.</p>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 14px;">
-          <div class="form-row"><label>Customer name</label><input id="qn-customer" /></div>
-          <div class="form-row"><label>Business name</label><input id="qn-business" /></div>
-          <div class="form-row"><label>Phone number</label><input id="qn-phone" /></div>
-          <div class="form-row"><label>Email</label><input id="qn-email" type="email" /></div>
-          <div class="form-row"><label>Account number</label><input id="qn-account" /></div>
-          <div class="form-row"><label>Task number</label><input id="qn-task" /></div>
-        </div>
-        <div class="modal-actions">
-          <button type="button" class="btn secondary" id="qn-cancel">Cancel</button>
-          <button type="submit" class="btn">Save</button>
-        </div>
-      </form>
     </div>
   </div>
 
@@ -516,7 +507,7 @@
           <p style="white-space:pre-wrap; font-family: ui-monospace, monospace; margin: 6px 0 0;">${n.note}</p>
           <div style="margin-top:6px;">${noteDetailChips(n)}</div>
         `;
-        div.querySelector('.edit-note-btn').addEventListener('click', () => openNoteModal(n));
+        div.querySelector('.edit-note-btn').addEventListener('click', () => loadNoteIntoForm(n));
         div.querySelector('.delete-note-btn').addEventListener('click', async () => {
           if (!confirm('Delete this note?')) return;
           await supabase.from('quick_notes').delete().eq('id', n.id);
@@ -526,11 +517,10 @@
       }
     }
 
-    const noteModal = document.getElementById('note-modal-backdrop');
-
-    function openNoteModal(n) {
+    // Always-visible form (no modal) — Edit just loads a note back into the
+    // same box; Save inserts or updates depending on whether qn-id is set.
+    function loadNoteIntoForm(n) {
       document.getElementById('note-form').reset();
-      document.getElementById('note-modal-title').textContent = n ? 'Edit note' : 'New note';
       document.getElementById('qn-id').value = n?.id || '';
       document.getElementById('qn-text').value = n?.note || '';
       document.getElementById('qn-customer').value = n?.customer_name || '';
@@ -539,11 +529,13 @@
       document.getElementById('qn-email').value = n?.email || '';
       document.getElementById('qn-account').value = n?.account_number || '';
       document.getElementById('qn-task').value = n?.task_number || '';
-      noteModal.classList.remove('hidden');
+      document.getElementById('qn-save').textContent = n ? 'Update note' : 'Save note';
+      document.getElementById('qn-cancel-edit').classList.toggle('hidden', !n);
+      document.getElementById('qn-text').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('qn-text').focus();
     }
 
-    document.getElementById('new-note-btn').addEventListener('click', () => openNoteModal(null));
-    document.getElementById('qn-cancel').addEventListener('click', () => noteModal.classList.add('hidden'));
+    document.getElementById('qn-cancel-edit').addEventListener('click', () => loadNoteIntoForm(null));
 
     document.getElementById('note-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -566,7 +558,7 @@
         alert(error.message);
         return;
       }
-      noteModal.classList.add('hidden');
+      loadNoteIntoForm(null);
       await loadQuickNotes();
     });
 
