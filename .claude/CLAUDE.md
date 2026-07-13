@@ -1685,3 +1685,75 @@ couldn't be fire-tested end-to-end with a real admin session (no admin login cre
 in this environment, same limitation noted for `create-agent` originally) — verified instead via
 code review against the already-working `create-agent` pattern it mirrors, the client-side
 integration tests above, and the direct FK/cascade behavior confirmed at the database level.
+
+---
+
+🎨 v29 Update – Wave tags, per-agent case filter, a real Team trends chart, orange, and the
+Culligan X CustomConnect rename (2026-07-13)
+
+**Agent "wave" tags, for stats.** This is a call centre that's constantly recruiting, and the
+admin needed to tell agents apart by recruiting cohort ("Wave 1", "Wave 2", …) when looking at
+performance numbers. Added `profiles.wave` — a **free-text** column, deliberately not a lookup
+table, since new waves get created on an ongoing basis and a managed lookup table would just be
+one more admin screen to visit before a new intake can even be tagged. Editable inline in
+`admin/users.html`'s agent table (same always-editable-cell pattern as the team/department
+selects, just a text input with `blur`-to-save instead of `change`), shown in
+`admin/agent-detail.html`'s header meta line, and filterable in `admin/reports.html`'s Agent
+performance report (`loadWaves()` builds the filter's options from whatever wave values are
+actually in use, rather than a fixed list — so it never goes stale as new waves get added).
+
+**Per-agent filter on the All Cases page.** `admin/cases.html` already had a department filter but
+no way to jump straight to one agent's cases — the admin had to eyeball the "Assigned to" column
+across every row. Added an Agent filter (with an explicit "— Unassigned —" option, distinct from
+"All agents") next to it. Also wired a `?agent=<id>` deep link and a "View all cases" button on
+`admin/agent-detail.html`, so looking at one agent's stats and then wanting to see their actual
+case list is one click, not a manual re-filter.
+
+**Team trends got a real chart.** The old "Team trends" widget was a strip of tiny custom bars —
+8 skinny columns per metric with a value squeezed above each one, no axis, no way to read an exact
+value, no way to see more than the last 8 weeks at a glance. Per the dataviz skill's form
+heuristic (trend-over-time → line, not bar — bars are for comparing magnitudes side by side; a
+line reads "is this going up or down" far better), rebuilt `renderTrendChart()` as a proper SVG
+line chart per metric: gridlines at clean rounded tick values, week labels on the X axis, a direct
+end-label on the most recent point (so the current number is always readable without hovering), a
+hover crosshair + tooltip that snaps to the nearest week, and a "View as table" toggle under each
+chart so every value stays reachable without hovering (the skill's "tooltips enhance, they never
+gate" rule). Caught and fixed one real bug this way, not just in code review: the first cut clipped
+the end-label text off the edge of the SVG (`7h 20m` rendered as `7h 20r`) because SVG's root
+`overflow` defaults to `hidden` and the right margin was too tight for longer duration strings —
+fixed by widening the margin and re-screenshotting to confirm, per the skill's "render it and look
+at it" step; a `console.error`-only sweep would never have caught a visual clipping bug like this.
+Kept the three metrics as three separate single-series charts rather than combining them onto one
+multi-axis chart — different units (duration / count / percentage) on one chart would mean either
+a dual-axis chart (the skill's #1 listed anti-pattern) or a meaningless shared scale. Screenshotted
+in both light and dark mode to confirm — everything here reads off existing theme CSS variables
+(`--border`, `--text-muted`, `--dark-blue`, `--white`) except the three per-metric series colors,
+which were already-hardcoded hex values carried over unchanged from the old bar version.
+
+**Orange added to the theme.** Previously `--orange` (`#F57C00`) existed only as a semantic
+warning color (SLA-breach badges, "slower than average" indicators). Added it as a visible brand
+accent too: a 4px orange stripe under the app header (present on every page), and the sidebar's
+active-nav-link indicator switched from blue to orange (both the desktop left-border version and
+the mobile bottom-border version). Reusing the existing token rather than inventing a new one, and
+using it for a *different* UI role (navigation/brand, not warning) than its existing semantic use
+— a common, low-risk way to extend a palette without any actual new color decision to validate.
+
+**Renamed CulliganConnect → Culligan X CustomConnect.** The staff emails already in this system
+(`@customconnect.com`) had been the tell all along — this is a joint Culligan/CustomConnect
+operation, and the tool's internal name hadn't caught up. Updated every user-visible occurrence:
+`<title>` and header `.brand` text on all 16 pages, the login page's heading, `admin/import.html`'s
+two body-copy mentions, and the README's title. Deliberately left two categories of
+`CulliganConnect` untouched: the actual Supabase project's name (`gitiijehmmovfopgzmtl`, an
+infrastructure identifier, not app branding — renaming it would mean actually renaming the
+Supabase project, out of scope and unnecessary), and every historical mention inside this file's
+own past version entries (a changelog describes the app by the name it had *at the time*;
+rewriting history here would just be noise). Also deliberately did **not** touch the
+"Culligan Customer Services" signature baked into the escalation email templates — that's Culligan
+(the water company) signing off to *its* customers, unrelated to what the internal ops tool that
+CustomConnect's agents use is called.
+
+Verified: RLS-simulated `profiles.wave` update as a real admin (rolled back, no data left behind);
+Playwright click-tests for the wave input's persist-on-blur, the agent filter's deep-link and
+in-query-filtering, and the trend chart's hover/crosshair/tooltip/table-toggle against both
+synthetic multi-week data and the true empty-data case; screenshots of the redesigned chart in
+light and dark mode; the full 14-page `scan.js` sweep — all clean.

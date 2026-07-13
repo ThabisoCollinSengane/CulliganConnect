@@ -57,6 +57,7 @@ a {
   align-items: center;
   justify-content: space-between;
   box-shadow: var(--shadow);
+  border-bottom: 4px solid var(--orange);
 }
 
 .app-header .brand {
@@ -120,7 +121,7 @@ a {
 }
 
 .sidebar a.active {
-  border-left-color: var(--accent-blue);
+  border-left-color: var(--orange);
   background: var(--light-blue);
   font-weight: 600;
 }
@@ -465,7 +466,7 @@ kbd {
   }
   .sidebar a.active {
     border-left-color: transparent;
-    border-bottom-color: var(--accent-blue);
+    border-bottom-color: var(--orange);
   }
   .main {
     padding: 16px;
