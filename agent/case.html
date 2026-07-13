@@ -267,8 +267,8 @@
       currentCase = data;
       renderCaseHeader();
       renderStatusForm();
-      maybePrefillEscalation();
-      await renderTemplateCard();
+      const prefilled = maybePrefillEscalation();
+      if (!prefilled) await renderTemplateCard();
     }
 
     function renderCaseHeader() {
@@ -331,16 +331,26 @@
     // ready to fill in, instead of the agent having to select it themselves.
     function maybePrefillEscalation() {
       const isClosed = currentCase.status === 'closed' || currentCase.status === 'resolved';
-      if (new URLSearchParams(window.location.search).get('action') !== 'escalate') return;
-      if (currentCase.status === 'escalated' || isClosed) return;
+      if (new URLSearchParams(window.location.search).get('action') !== 'escalate') return false;
+      if (currentCase.status === 'escalated' || isClosed) return false;
 
       document.getElementById('status-select').value = 'escalated';
       document.getElementById('escalation-fields').classList.remove('hidden');
       document.getElementById('escalation-reason').focus();
+      autoPreviewTemplate();
+      return true;
     }
 
     document.getElementById('status-select').addEventListener('change', (e) => {
-      document.getElementById('escalation-fields').classList.toggle('hidden', e.target.value !== 'escalated');
+      const nowEscalated = e.target.value === 'escalated';
+      document.getElementById('escalation-fields').classList.toggle('hidden', !nowEscalated);
+      if (nowEscalated) {
+        autoPreviewTemplate();
+      } else {
+        document.getElementById('template-card').classList.add('hidden');
+        document.getElementById('template-preview-hint').classList.add('hidden');
+        updatePreviewBtnLabel();
+      }
     });
 
     function showStatusSuccess(text) {
@@ -430,14 +440,24 @@
     async function renderTemplateCard() {
       if (currentCase.status !== 'escalated' || !currentCase.escalation_reason_id) {
         document.getElementById('template-card').classList.add('hidden');
+        updatePreviewBtnLabel();
         return;
       }
       await loadTemplateForReason(currentCase.escalation_reason_id);
     }
 
-    // Shared by the auto-render-on-load path (already-saved escalated case)
-    // and the "Show escalation template" button (previewing before saving) —
-    // same fetch, same render, just a different source for the reason id.
+    // Escalation fields default to a reason already selected (browsers pick
+    // the first <option>), so the template should just appear — no click
+    // required. Called whenever the escalation fields become visible or the
+    // reason changes, for both the auto-render-on-load path (already-saved
+    // escalated case) and the pre-save "Create and escalate" / manual flow.
+    function autoPreviewTemplate() {
+      if (document.getElementById('escalation-fields').classList.contains('hidden')) return;
+      const reasonId = document.getElementById('escalation-reason').value;
+      if (!reasonId) return;
+      loadTemplateForReason(reasonId);
+    }
+
     async function loadTemplateForReason(reasonId, { silent = false } = {}) {
       const templateCard = document.getElementById('template-card');
       const hint = document.getElementById('template-preview-hint');
@@ -455,25 +475,43 @@
           hint.textContent = 'No template configured for this reason yet — ask your admin.';
           hint.classList.remove('hidden');
         }
+        updatePreviewBtnLabel();
         return;
       }
 
       escalationTemplate = data;
       templateCard.classList.remove('hidden');
       renderTemplatePreviews();
+      updatePreviewBtnLabel();
+    }
+
+    function updatePreviewBtnLabel() {
+      const hidden = document.getElementById('template-card').classList.contains('hidden');
+      document.getElementById('preview-template-btn').textContent = hidden ? '👀 Show escalation template' : '🙈 Hide escalation template';
     }
 
     document.getElementById('preview-template-btn').addEventListener('click', () => {
-      const reasonId = document.getElementById('escalation-reason').value;
+      const templateCard = document.getElementById('template-card');
       const hint = document.getElementById('template-preview-hint');
+
+      if (!templateCard.classList.contains('hidden')) {
+        templateCard.classList.add('hidden');
+        hint?.classList.add('hidden');
+        updatePreviewBtnLabel();
+        return;
+      }
+
+      const reasonId = document.getElementById('escalation-reason').value;
       if (!reasonId) {
         hint.textContent = 'Select an escalation reason above first.';
         hint.classList.remove('hidden');
         return;
       }
       loadTemplateForReason(reasonId);
-      document.getElementById('template-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      templateCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
+
+    document.getElementById('escalation-reason').addEventListener('change', autoPreviewTemplate);
 
     // Both templates render side by side, always from the same source — one
     // professional standard, no freestyling. Step 2 re-renders as the update is typed.
