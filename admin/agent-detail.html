@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent – CulliganConnect</title>
+  <title>Agent – Culligan X CustomConnect</title>
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
   <header class="app-header">
-    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <div class="brand"><span class="drop">C</span> Culligan X CustomConnect · Admin</div>
     <nav>
       <a href="/admin/index.html">Dashboard</a>
       <a href="/admin/cases.html">Cases</a>
@@ -43,6 +43,7 @@
             <p class="hint" id="agent-meta"></p>
           </div>
           <div style="display:flex; gap:8px;">
+            <a class="btn secondary" id="view-cases-link" href="#">View all cases</a>
             <button class="btn secondary" id="edit-btn">Edit</button>
             <button class="btn secondary" id="delete-btn" style="color:var(--red, #c0392b);">Delete</button>
           </div>
@@ -181,7 +182,7 @@
       const errorEl = document.getElementById('load-error');
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, email, role, is_active, teams(name), departments(name)')
+        .select('id, full_name, email, role, is_active, wave, teams(name), departments(name)')
         .eq('id', agentId)
         .single();
 
@@ -194,8 +195,9 @@
 
       agent = data;
       document.getElementById('agent-name').textContent = agent.full_name || agent.email;
+      document.getElementById('view-cases-link').href = `/admin/cases.html?agent=${agentId}`;
       document.getElementById('agent-meta').textContent =
-        [agent.email, agent.role, agent.teams?.name, agent.departments?.name, agent.is_active ? 'Active' : 'Disabled']
+        [agent.email, agent.role, agent.teams?.name, agent.departments?.name, agent.wave, agent.is_active ? 'Active' : 'Disabled']
           .filter(Boolean).join(' · ');
 
       await Promise.all([loadStats(), loadStreakAndBadges(), loadTargets(), loadRecentCases()]);

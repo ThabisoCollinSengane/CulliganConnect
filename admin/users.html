@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agents – CulliganConnect</title>
+  <title>Agents – Culligan X CustomConnect</title>
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
   <header class="app-header">
-    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <div class="brand"><span class="drop">C</span> Culligan X CustomConnect · Admin</div>
     <nav>
       <a href="/admin/index.html">Dashboard</a>
       <a href="/admin/cases.html">Cases</a>
@@ -58,7 +58,7 @@
         </div>
         <table id="agents-table">
           <thead>
-            <tr><th>Name</th><th>Email</th><th>Team</th><th>Department</th><th>Role</th><th>Temp password</th><th>Status</th><th></th></tr>
+            <tr><th>Name</th><th>Email</th><th>Team</th><th>Department</th><th>Wave</th><th>Role</th><th>Temp password</th><th>Status</th><th></th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -260,19 +260,19 @@
     async function loadAgents() {
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, email, role, is_active, team_id, department_id, agent_onboarding(temp_password)')
+        .select('id, full_name, email, role, is_active, team_id, department_id, wave, agent_onboarding(temp_password)')
         .order('full_name');
 
       const tbody = document.querySelector('#agents-table tbody');
       tbody.innerHTML = '';
 
       if (error) {
-        tbody.innerHTML = `<tr><td colspan="8" class="error-text">${error.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" class="error-text">${error.message}</td></tr>`;
         return;
       }
 
       if (!data || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="hint">No agents yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="hint">No agents yet.</td></tr>';
         return;
       }
 
@@ -292,6 +292,7 @@
           <td>${u.email}</td>
           <td><select class="team-select" data-id="${u.id}" style="min-width:140px;">${teamOptions(u.team_id)}</select></td>
           <td><select class="dept-select" data-id="${u.id}" style="min-width:140px;">${deptOptions(u.department_id)}</select></td>
+          <td><input class="wave-input" data-id="${u.id}" value="${u.wave || ''}" placeholder="e.g. Wave 1" style="min-width:100px;" /></td>
           <td><span class="badge blue">${u.role}</span></td>
           <td>${tempCell}</td>
           <td>${statusBadge}</td>
@@ -319,6 +320,15 @@
             .update({ department_id: sel.value || null }).eq('id', sel.dataset.id);
           if (upErr) { alert(upErr.message); await loadAgents(); }
         });
+      });
+
+      tbody.querySelectorAll('.wave-input').forEach(input => {
+        input.addEventListener('blur', async () => {
+          const { error: upErr } = await supabase.from('profiles')
+            .update({ wave: input.value.trim() || null }).eq('id', input.dataset.id);
+          if (upErr) { alert(upErr.message); await loadAgents(); }
+        });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
       });
 
       tbody.querySelectorAll('.copy-pw-btn').forEach(btn => {

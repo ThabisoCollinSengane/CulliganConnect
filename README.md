@@ -1,4 +1,4 @@
-# CulliganConnect
+# Culligan X CustomConnect
 
 Internal case management and performance tracking tool for the Culligan water call centre.
 See `.claude/CLAUDE.md` for the full product spec.

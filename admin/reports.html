@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Reports – CulliganConnect</title>
+  <title>Reports – Culligan X CustomConnect</title>
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
   <header class="app-header">
-    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <div class="brand"><span class="drop">C</span> Culligan X CustomConnect · Admin</div>
     <nav>
       <a href="/admin/index.html">Dashboard</a>
       <a href="/admin/cases.html">Cases</a>
@@ -39,18 +39,18 @@
         <h2 style="margin:0 0 4px;">📈 Team trends</h2>
         <p class="hint" id="trend-subheading" style="margin:0 0 14px;">Collective, company-wide — every case, every agent, last 8 weeks. Not filtered by the report below.</p>
         <p class="hint" id="trend-direction" style="font-weight:600; color:var(--accent-blue); margin:0 0 16px;"></p>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:20px;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:20px;">
           <div>
             <h4 style="margin:0 0 8px;">⏱ Avg. time to close</h4>
-            <div id="trend-time"></div>
+            <div id="trend-time" style="position:relative;"></div>
           </div>
           <div>
             <h4 style="margin:0 0 8px;">✅ Cases closed</h4>
-            <div id="trend-volume"></div>
+            <div id="trend-volume" style="position:relative;"></div>
           </div>
           <div>
             <h4 style="margin:0 0 8px;">🚨 Escalations breaching SLA</h4>
-            <div id="trend-breach"></div>
+            <div id="trend-breach" style="position:relative;"></div>
           </div>
         </div>
       </div>
@@ -75,6 +75,10 @@
           <div>
             <label style="margin-top:0;">Department</label>
             <select id="department-filter" style="width:200px;"></select>
+          </div>
+          <div>
+            <label style="margin-top:0;">Wave</label>
+            <select id="wave-filter" style="width:160px;"></select>
           </div>
           <div>
             <label style="margin-top:0;">Rank by</label>
@@ -132,7 +136,7 @@
 
     if (profile) {
       subscribeToNotifications(profile.id);
-      await loadDepartments();
+      await Promise.all([loadDepartments(), loadWaves()]);
       await loadTeamTrends();
     }
 
@@ -153,25 +157,133 @@
         (data || []).map(d => `<option value="${d.id}">${d.name}</option>`).join('');
     }
 
+    // Waves are a free-text tag (not a lookup table — new intakes get added
+    // often), so the filter options come from whatever's actually in use.
+    async function loadWaves() {
+      const { data } = await supabase.from('profiles').select('wave').eq('role', 'agent').not('wave', 'is', null);
+      const waves = [...new Set((data || []).map(r => r.wave).filter(Boolean))].sort();
+      document.getElementById('wave-filter').innerHTML = '<option value="">All waves</option>' +
+        waves.map(w => `<option value="${w}">${w}</option>`).join('');
+    }
+
     // ---- Team trends: collective, company-wide weekly averages — not sliced by
-    // agent, so it answers "is the whole team getting faster/slower" at a glance. ----
+    // agent, so it answers "is the whole team getting faster/slower" at a glance.
+    // A line chart reads "is this going up or down" far better than a bar-per-week
+    // strip did — bars are for comparing magnitudes side by side, lines are for
+    // trend-over-time (see dataviz skill: choosing-a-form). ----
+    function niceCeil(value) {
+      if (value <= 0) return 1;
+      const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+      const steps = [1, 2, 5, 10];
+      const normalized = value / magnitude;
+      const step = steps.find(s => s >= normalized) || 10;
+      return step * magnitude;
+    }
+
     function renderTrendChart(containerId, weekLabels, values, color, format) {
+      const container = document.getElementById(containerId);
+      const W = 320, H = 150;
+      const padL = 34, padR = 62, padT = 12, padB = 22;
+      const plotW = W - padL - padR;
+      const plotH = H - padT - padB;
+      const n = weekLabels.length;
+
       const numeric = values.filter(v => v !== null);
-      const max = Math.max(1, ...numeric);
-      const bars = weekLabels.map((label, i) => {
-        const v = values[i];
-        const heightPct = v === null ? 2 : Math.max(3, Math.round((v / max) * 100));
-        return `
-          <div style="display:flex; flex-direction:column; align-items:center; flex:1; min-width:0;">
-            <div class="hint" style="font-size:0.7rem; margin-bottom:4px; white-space:nowrap;">${v === null ? '–' : format(v)}</div>
-            <div style="width:100%; max-width:34px; height:90px; display:flex; align-items:flex-end; background:var(--light-blue); border-radius:4px; overflow:hidden;">
-              <div style="width:100%; height:${heightPct}%; background:${v === null ? 'var(--border)' : color};"></div>
-            </div>
-            <div class="hint" style="font-size:0.68rem; margin-top:4px; white-space:nowrap;">${label}</div>
-          </div>
-        `;
+      const niceMax = niceCeil(Math.max(1, ...numeric));
+      const tickCount = 4;
+      const tickVals = Array.from({ length: tickCount + 1 }, (_, i) => Math.round((niceMax * i) / tickCount));
+
+      const xFor = (i) => padL + (n === 1 ? plotW / 2 : (plotW * i) / (n - 1));
+      const yFor = (v) => padT + plotH - (v / niceMax) * plotH;
+
+      const gridLines = tickVals.map(t => {
+        const y = yFor(t);
+        return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" />
+                <text x="${padL - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${format(t)}</text>`;
       }).join('');
-      document.getElementById(containerId).innerHTML = `<div style="display:flex; gap:6px; align-items:flex-end;">${bars}</div>`;
+
+      const xLabels = weekLabels.map((label, i) => {
+        if (n > 6 && i % 2 !== 0 && i !== n - 1) return '';
+        return `<text x="${xFor(i).toFixed(1)}" y="${H - 6}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${label}</text>`;
+      }).join('');
+
+      let pathD = '';
+      let drawing = false;
+      values.forEach((v, i) => {
+        if (v === null) { drawing = false; return; }
+        const x = xFor(i).toFixed(1), y = yFor(v).toFixed(1);
+        pathD += (drawing ? ' L' : ' M') + x + ' ' + y;
+        drawing = true;
+      });
+
+      const dots = values.map((v, i) => v === null ? '' :
+        `<circle class="trend-dot" data-i="${i}" cx="${xFor(i).toFixed(1)}" cy="${yFor(v).toFixed(1)}" r="4.5" fill="${color}" stroke="var(--white)" stroke-width="2" />`
+      ).join('');
+
+      let endLabel = '';
+      for (let i = n - 1; i >= 0; i--) {
+        if (values[i] !== null) {
+          endLabel = `<text x="${(xFor(i) + 9).toFixed(1)}" y="${(yFor(values[i]) + 4).toFixed(1)}" font-size="11" font-weight="700" fill="var(--dark-blue)">${format(values[i])}</text>`;
+          break;
+        }
+      }
+
+      container.innerHTML = `
+        <svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; display:block;">
+          ${gridLines}
+          <path d="${pathD}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          ${dots}
+          ${endLabel}
+          ${xLabels}
+          <line class="trend-crosshair" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="var(--text-muted)" stroke-width="1" opacity="0" />
+          <rect class="trend-hit" x="${padL}" y="0" width="${plotW}" height="${H}" fill="transparent" style="cursor:crosshair;" />
+        </svg>
+        <div class="trend-tooltip hint" style="position:absolute; top:0; left:0; transform:translate(-9999px,-9999px); background:var(--white); border:1px solid var(--border); border-radius:6px; padding:5px 9px; font-size:0.78rem; box-shadow:var(--shadow); pointer-events:none; white-space:nowrap; z-index:5;"></div>
+        <button type="button" class="btn secondary trend-table-toggle" style="padding:3px 10px; font-size:0.76rem; margin-top:4px;">View as table</button>
+        <table class="trend-table hidden" style="margin-top:6px;">
+          <thead><tr><th>Week</th><th>Value</th></tr></thead>
+          <tbody>${weekLabels.map((label, i) => `<tr><td>${label}</td><td>${values[i] === null ? '—' : format(values[i])}</td></tr>`).join('')}</tbody>
+        </table>
+      `;
+
+      const svg = container.querySelector('svg');
+      const hitRect = container.querySelector('.trend-hit');
+      const crosshair = container.querySelector('.trend-crosshair');
+      const tooltip = container.querySelector('.trend-tooltip');
+
+      function showAt(i) {
+        if (values[i] === null) { crosshair.setAttribute('opacity', '0'); tooltip.style.transform = 'translate(-9999px,-9999px)'; return; }
+        const x = xFor(i);
+        crosshair.setAttribute('x1', x.toFixed(1));
+        crosshair.setAttribute('x2', x.toFixed(1));
+        crosshair.setAttribute('opacity', '1');
+        tooltip.textContent = `${weekLabels[i]}: ${format(values[i])}`;
+        // The SVG scales responsively (viewBox W×H → clientWidth × clientWidth·H/W),
+        // so map SVG-space coordinates to screen pixels with that same ratio.
+        const scale = container.clientWidth / W;
+        const left = x * scale;
+        const top = yFor(values[i]) * scale;
+        tooltip.style.transform = `translate(${Math.min(Math.max(left - 40, 0), container.clientWidth - 90)}px, ${Math.max(top - 34, 0)}px)`;
+      }
+
+      hitRect.addEventListener('pointermove', (e) => {
+        const rect = svg.getBoundingClientRect();
+        const relX = ((e.clientX - rect.left) / rect.width) * W;
+        let nearest = 0, best = Infinity;
+        for (let i = 0; i < n; i++) {
+          const d = Math.abs(xFor(i) - relX);
+          if (d < best) { best = d; nearest = i; }
+        }
+        showAt(nearest);
+      });
+      hitRect.addEventListener('pointerleave', () => {
+        crosshair.setAttribute('opacity', '0');
+        tooltip.style.transform = 'translate(-9999px,-9999px)';
+      });
+
+      container.querySelector('.trend-table-toggle').addEventListener('click', () => {
+        container.querySelector('.trend-table').classList.toggle('hidden');
+      });
     }
 
     async function loadTeamTrends() {
@@ -276,13 +388,16 @@
     async function runReport() {
       const { from, to } = resolveRange();
       const deptId = document.getElementById('department-filter').value;
-      lastDeptLabel = deptId
-        ? document.querySelector('#department-filter option:checked').textContent
-        : 'All departments';
+      const wave = document.getElementById('wave-filter').value;
+      lastDeptLabel = [
+        deptId ? document.querySelector('#department-filter option:checked').textContent : null,
+        wave || null,
+      ].filter(Boolean).join(' · ') || 'All departments';
 
-      let agentQuery = supabase.from('profiles').select('id, full_name, department_id, departments(name)')
+      let agentQuery = supabase.from('profiles').select('id, full_name, department_id, wave, departments(name)')
         .eq('role', 'agent').eq('is_active', true);
       if (deptId) agentQuery = agentQuery.eq('department_id', deptId);
+      if (wave) agentQuery = agentQuery.eq('wave', wave);
       const { data: agentList } = await agentQuery;
 
       const today = new Date().toISOString().slice(0, 10);

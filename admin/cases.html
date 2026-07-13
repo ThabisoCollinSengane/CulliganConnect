@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cases – CulliganConnect</title>
+  <title>Cases – Culligan X CustomConnect</title>
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
   <header class="app-header">
-    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <div class="brand"><span class="drop">C</span> Culligan X CustomConnect · Admin</div>
     <nav>
       <a href="/admin/index.html">Dashboard</a>
       <a href="/admin/cases.html" class="active">Cases</a>
@@ -52,6 +52,7 @@
             <option value="closed">Closed</option>
           </select>
           <select id="department-filter" style="flex:1; min-width:160px;"></select>
+          <select id="agent-filter" style="flex:1; min-width:160px;"></select>
           <label style="display:flex; align-items:center; gap:6px; margin:0; white-space:nowrap;">
             <input type="checkbox" id="risk-only" style="width:auto;" /> At-risk only
           </label>
@@ -89,9 +90,14 @@
     const profile = await requireRole(['admin']);
     let agents = [];
 
+    // admin/agent-detail.html deep-links here with ?agent=<id> to jump
+    // straight to one agent's cases.
+    const params = new URLSearchParams(window.location.search);
+
     if (profile) {
       subscribeToNotifications(profile.id);
       await Promise.all([loadDepartments(), loadAgents()]);
+      if (params.get('agent')) document.getElementById('agent-filter').value = params.get('agent');
       await loadCases();
     }
 
@@ -103,6 +109,7 @@
     document.getElementById('search-input').addEventListener('input', debounce(loadCases, 300));
     document.getElementById('status-filter').addEventListener('change', loadCases);
     document.getElementById('department-filter').addEventListener('change', loadCases);
+    document.getElementById('agent-filter').addEventListener('change', loadCases);
     document.getElementById('risk-only').addEventListener('change', loadCases);
 
     function debounce(fn, ms) {
@@ -119,8 +126,9 @@
     async function loadAgents() {
       const { data } = await supabase.from('profiles').select('id, full_name').eq('is_active', true).order('full_name');
       agents = data || [];
-      const options = '<option value="">— unassigned —</option>' + agents.map(a => `<option value="${a.id}">${a.full_name}</option>`).join('');
       document.getElementById('bulk-agent-select').innerHTML = agents.map(a => `<option value="${a.id}">${a.full_name}</option>`).join('');
+      document.getElementById('agent-filter').innerHTML = '<option value="">All agents</option><option value="_unassigned">— Unassigned —</option>' +
+        agents.map(a => `<option value="${a.id}">${a.full_name}</option>`).join('');
     }
 
     function agentOptionsHtml(selectedId) {
@@ -132,6 +140,7 @@
       const search = document.getElementById('search-input').value.trim();
       const status = document.getElementById('status-filter').value;
       const deptId = document.getElementById('department-filter').value;
+      const agentId = document.getElementById('agent-filter').value;
       const riskOnly = document.getElementById('risk-only').checked;
 
       let query = supabase
@@ -142,6 +151,8 @@
 
       if (status) query = query.eq('status', status);
       if (deptId) query = query.eq('department_id', deptId);
+      if (agentId === '_unassigned') query = query.is('assigned_to', null);
+      else if (agentId) query = query.eq('assigned_to', agentId);
       if (riskOnly) query = query.eq('status', 'escalated');
       if (search) query = query.or(`case_number.ilike.%${search}%,account_number.ilike.%${search}%,customer_name.ilike.%${search}%`);
 
