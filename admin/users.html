@@ -66,6 +66,41 @@
     </main>
   </div>
 
+  <div class="modal-backdrop hidden" id="edit-modal-backdrop">
+    <div class="modal">
+      <h3>Edit agent</h3>
+      <form id="edit-agent-form">
+        <input type="hidden" id="edit-id" />
+        <div class="form-row">
+          <label for="edit-full-name">Full name</label>
+          <input id="edit-full-name" required />
+        </div>
+        <div class="form-row">
+          <label for="edit-email">Email</label>
+          <input id="edit-email" type="email" required />
+          <p class="hint">Changes their login email too, not just the display name shown here.</p>
+        </div>
+        <div class="form-row">
+          <label for="edit-role">Role</label>
+          <select id="edit-role">
+            <option value="agent">Agent</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="edit-password">Reset password (optional)</label>
+          <input id="edit-password" type="text" minlength="8" placeholder="Leave blank to keep current password" />
+          <p class="hint">Setting this signs them out of their old password immediately — share the new one directly.</p>
+        </div>
+        <p class="error-text hidden" id="edit-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="edit-cancel-btn">Cancel</button>
+          <button type="submit" class="btn" id="edit-save-btn">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="modal-backdrop">
     <div class="modal">
       <h3>Add agent</h3>
@@ -253,7 +288,7 @@
           ? `<code style="font-size:0.85rem;">${tempPw}</code> <button class="btn secondary copy-pw-btn" data-pw="${tempPw}" style="padding:2px 8px;">Copy</button>`
           : '<span class="hint">— changed —</span>';
         tr.innerHTML = `
-          <td>${u.full_name || '—'}</td>
+          <td><a href="/admin/agent-detail.html?id=${u.id}" class="stats-link">${u.full_name || '—'}</a></td>
           <td>${u.email}</td>
           <td><select class="team-select" data-id="${u.id}" style="min-width:140px;">${teamOptions(u.team_id)}</select></td>
           <td><select class="dept-select" data-id="${u.id}" style="min-width:140px;">${deptOptions(u.department_id)}</select></td>
@@ -261,8 +296,10 @@
           <td>${tempCell}</td>
           <td>${statusBadge}</td>
           <td style="white-space:nowrap;">
+            <button class="btn secondary edit-btn" data-id="${u.id}" data-name="${u.full_name || ''}" data-email="${u.email}" data-role="${u.role}">Edit</button>
             <button class="btn secondary toggle-btn" data-id="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Disable' : 'Enable'}</button>
             <button class="btn secondary target-btn" data-id="${u.id}" data-name="${u.full_name}">Target</button>
+            <button class="btn secondary delete-btn" data-id="${u.id}" data-name="${u.full_name || ''}" style="color:var(--red, #c0392b);">Delete</button>
           </td>
         `;
         tbody.appendChild(tr);
@@ -311,6 +348,88 @@
       tbody.querySelectorAll('.target-btn').forEach(btn => {
         btn.addEventListener('click', () => openTargetModal(btn.dataset.id, btn.dataset.name));
       });
+
+      tbody.querySelectorAll('.edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => openEditModal(btn.dataset));
+      });
+
+      tbody.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => deleteAgent(btn.dataset.id, btn.dataset.name));
+      });
+    }
+
+    // ---- Edit agent (name, email, role, password reset) ----
+    const editModal = document.getElementById('edit-modal-backdrop');
+    document.getElementById('edit-cancel-btn').addEventListener('click', () => editModal.classList.add('hidden'));
+
+    function openEditModal(data) {
+      document.getElementById('edit-error').classList.add('hidden');
+      document.getElementById('edit-id').value = data.id;
+      document.getElementById('edit-full-name').value = data.name;
+      document.getElementById('edit-email').value = data.email;
+      document.getElementById('edit-role').value = data.role;
+      document.getElementById('edit-password').value = '';
+      editModal.classList.remove('hidden');
+    }
+
+    document.getElementById('edit-agent-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('edit-error');
+      errorEl.classList.add('hidden');
+      const saveBtn = document.getElementById('edit-save-btn');
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+
+      const payload = {
+        action: 'update',
+        id: document.getElementById('edit-id').value,
+        full_name: document.getElementById('edit-full-name').value.trim(),
+        email: document.getElementById('edit-email').value.trim(),
+        role: document.getElementById('edit-role').value,
+      };
+      const newPassword = document.getElementById('edit-password').value;
+      if (newPassword) payload.password = newPassword;
+
+      try {
+        const { data: result, error: fnError } = await supabase.functions.invoke('manage-agent', { body: payload });
+        if (fnError) {
+          const message = (await fnError.context?.json?.().catch(() => null))?.error || fnError.message;
+          throw new Error(message || 'Failed to update agent');
+        }
+        if (result?.error) throw new Error(result.error);
+
+        editModal.classList.add('hidden');
+        await loadAgents();
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove('hidden');
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save changes';
+      }
+    });
+
+    // ---- Delete agent ----
+    async function deleteAgent(id, name) {
+      if (id === profile.id) {
+        alert("You can't delete your own account.");
+        return;
+      }
+      if (!confirm(`Delete agent "${name}"? This removes their login entirely. Cases, notes, or audit history still linked to them will block the delete — reassign or delete those first, or disable the account instead.`)) return;
+
+      const { data: result, error: fnError } = await supabase.functions.invoke('manage-agent', {
+        body: { action: 'delete', id },
+      });
+      if (fnError) {
+        const message = (await fnError.context?.json?.().catch(() => null))?.error || fnError.message;
+        alert(message || 'Failed to delete agent');
+        return;
+      }
+      if (result?.error) {
+        alert(result.error);
+        return;
+      }
+      await loadAgents();
     }
 
     const targetModal = document.getElementById('target-modal-backdrop');

@@ -1589,3 +1589,99 @@ spot the v22 postmortem flagged. Fixed by moving both declarations above the `Pr
 alongside `myQuickNotes`. Re-verified against real production `email_templates` content (mixed
 `[BRACKET]` styles including a `[DATE/TIME]` placeholder with a slash in it, plus one template with
 zero placeholders at all) and the full 13-page `scan.js` sweep — both clean.
+
+---
+
+🧹 v28 Update – Agent management, case deletion, agent stats, and a 119-row import
+incident (2026-07-13)
+
+Five asks from one message: two straightforward feature gaps, two admin/agent CRUD additions, and
+one bug report that turned into the largest data-integrity incident found in this project so far.
+
+**Root-caused the "cases that auto populated that I didn't create" report — and it was much bigger
+than it first looked.** The reporting account, `thabiso.sengane@customconnect.com` (an *agent*
+profile — distinct from the admin's own `thacollin2@gmail.com` login, same person's name, different
+role), had several cases assigned to it with `source = 'salesforce_import'`, empty `customer_name`/
+`account_number`/`task_number`, and `external_case_number` values like `"Search this list..."`,
+`"Select Item 11"`, `"Sorted: None"`, and a raw banner string
+`"Salesforce enforces new security requirements in June 2026."` — none of which are real case data.
+Querying by `(source, created_at)` showed the true scope: **119 cases**, case numbers `00248504`
+through `00248622`, all inserted in one batch (identical `created_at` down to the microsecond), and
+*every single* `salesforce_import`-sourced case in the entire database belonged to this one batch —
+there was no legitimate import to avoid touching. Root cause: `admin/import.html`'s paste box parses
+every non-blank line as a case row with no review step, so when the whole Salesforce page got copied
+instead of just the table (exactly what the user's attached screenshot shows — search box, filter/
+sort status line, column headers, and all), each stray line became its own "case." An agent
+(`thabiso.sengane@customconnect.com`) found ~10 of the garbage rows in their queue and manually
+closed them to clear them out, which is why the report read as "cases I didn't create" rather than
+"cases that failed to import" — from the agent's side, a case that's already closed and clearly junk
+just looks like noise, not an error.
+  · **Cleanup:** deleted all 119 rows (`cases` CASCADEs to notes/attachments/history/reminders/
+    escalation_audit, and none of the 119 had any attached — confirmed by query before deleting).
+  · **Fix:** `admin/import.html` now has a **Review rows** step between column-mapping and
+    distribution. Every parsed row is shown with its mapped case number/customer, a checkbox, and a
+    default include/exclude verdict — rows are auto-unchecked when they have fewer than 2 populated
+    mapped fields, or when any raw cell matches a `JUNK_PATTERNS` list built directly from this
+    incident's real garbage strings (`"search this list"`, `/^select item\b/i`, `/^sorted:?\s/i`,
+    `"items •"` counts, `"updated N minutes/hours/days ago"`, `"security requirements"`, `"see
+    what's changing"`, `"change owner"`). Re-checking a column mapping recomputes the review table,
+    since which fields end up populated depends on the mapping. `buildCases()` (the function that
+    actually builds the insert payload) now only includes checked rows. Verified with a click-test
+    replaying the exact paste shape from this incident (real rows interleaved with `"Search this
+    list..."`, a sort-status line, `"Select Item 3"`, `"Sorted: None"`, `"Change Owner"`) — 5 of 7
+    rows correctly auto-flagged, only the 2 real rows end up in the insert payload.
+
+**Admins can now edit an agent's name/email/password, and delete agents.** `admin/users.html`'s
+agent table only ever supported team/department reassignment and enable/disable — there was no way
+to fix a typo'd name, change a login email, or reset a forgotten password without touching Supabase
+directly. New `supabase/functions/manage-agent/index.ts` Edge Function (service-role, mirrors
+`create-agent`'s auth-verification pattern): `action: 'update'` changes `auth.users` email/password
+via the Admin API (keeping `profiles.email` in sync in the same call, so the two can't drift the way
+they would if the client updated `profiles.email` directly) plus `full_name`/`department_id`/
+`team_id`/`role`, and a password reset re-seeds `agent_onboarding.temp_password` so the new password
+shows up the same way a freshly-created agent's does. `action: 'delete'` calls
+`auth.admin.deleteUser()`, which — since `profiles.id` has an `on delete cascade` FK to `auth.users`
+— cascades cleanly through everything with `ON DELETE CASCADE` (`agent_onboarding`, `badges`,
+`call_logs`, `notifications`, `quick_notes`, `targets`) but is correctly *blocked* by Postgres for
+any agent with cases, notes, or audit history still referencing them (`NO ACTION` FKs), surfaced as
+"reassign or delete their cases first, or disable the account instead" rather than a raw constraint
+error. Self-delete and self-role-change are blocked server-side. New `Edit`/`Delete` buttons added
+to both `admin/users.html`'s table and the new agent-detail page below.
+
+**Admins can delete cases (bulk, from `admin/cases.html`) and agents can too (bulk, from their own
+`agent/cases.html`).** `admin/cases.html` already had the row-checkbox infrastructure for bulk
+assignment, so a `Delete selected` button reusing the same selection just needed the button + a
+`cases.delete().in('id', ids)` call — admins already have full delete access
+(`admins_all_cases`). Agents didn't have any case-delete RLS policy at all; added
+`agents_delete_own_cases` (`assigned_to = auth.uid()`), scoped to their own cases only, matching the
+same ownership boundary as `agents_update_own_escalated_or_unassigned`. `agent/cases.html` only
+shows a row checkbox on cases actually assigned to the viewing agent (so "Whole team" view doesn't
+offer to delete a checkbox that would silently no-op under RLS). Verified with an RLS-simulated
+insert-then-delete: a second agent's delete attempt on someone else's case affects 0 rows, the
+owning agent's delete affects 1.
+
+**Admins can view an individual agent's stats.** New `admin/agent-detail.html?id=<agent id>` —
+linked from the agent's name in `admin/users.html`'s table. Reuses the exact same stat-tile/badge/
+streak pattern as the agent's own `agent/settings.html` (`computeStreak`, `weightedScore`,
+`fetchEscalationStats` from `js/gamification.js`), but read-only from the admin's side — badges are
+just *read*, not (re-)awarded, so an admin looking at an agent's page never has side effects on that
+agent's data. Also shows their configured individual targets and their last 20 cases
+(assigned-to-them or closed-by-them). Edit/Delete are available here too, so an admin doesn't have
+to bounce back to the list to act on what they're looking at.
+
+Building `admin/agent-detail.html`'s `profiles` query also confirmed the `teams(name)` embed works
+the same way `departments(name)` already does elsewhere in the codebase (both are plain FK embeds via
+`profiles.team_id`/`profiles.department_id`) — no new pattern, just reused it.
+
+All five pieces verified: RLS-simulated checks against production (escalation_templates-style
+migration verification for the new `agents_delete_own_cases` policy; confirmed the 119 garbage rows
+had zero attached notes/attachments/reminders before deleting them), Playwright click-tests against
+a mock Supabase client extended with a `functions.invoke` stub (new — the mock previously had no
+way to test Edge Function calls) for every new flow (agent-detail load + edit + delete, users-table
+edit + delete, admin/agent bulk case delete, ownership-gated checkboxes, the import review table
+against a replay of the actual incident data), and the full 14-page `scan.js` sweep (13 existing
+pages plus the new `admin/agent-detail.html`) — all clean. The `manage-agent` function itself
+couldn't be fire-tested end-to-end with a real admin session (no admin login credentials available
+in this environment, same limitation noted for `create-agent` originally) — verified instead via
+code review against the already-working `create-agent` pattern it mirrors, the client-side
+integration tests above, and the direct FK/cascade behavior confirmed at the database level.

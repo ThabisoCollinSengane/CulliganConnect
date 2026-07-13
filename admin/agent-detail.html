@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent – CulliganConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> CulliganConnect · Admin</div>
+    <nav>
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/import.html">Import</a>
+      <a href="/admin/users.html" class="active">Agents</a>
+      <a href="/admin/templates.html">Templates</a>
+      <a href="/admin/reports.html">Reports</a>
+      <a href="/admin/settings.html">Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/import.html">Import</a>
+      <a href="/admin/users.html" class="active">Agents</a>
+      <a href="/admin/templates.html">Templates</a>
+      <a href="/admin/reports.html">Reports</a>
+      <a href="/admin/settings.html">Departments &amp; Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <a href="/admin/users.html" class="hint">← Back to Agents</a>
+        <div class="toolbar" style="margin-top:8px;">
+          <div>
+            <h2 style="margin:0 0 4px;" id="agent-name">Loading…</h2>
+            <p class="hint" id="agent-meta"></p>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn secondary" id="edit-btn">Edit</button>
+            <button class="btn secondary" id="delete-btn" style="color:var(--red, #c0392b);">Delete</button>
+          </div>
+        </div>
+        <p class="error-text hidden" id="load-error"></p>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 4px;">Stats</h3>
+        <p class="hint">This week vs this month.</p>
+        <div class="grid stats" id="stats-grid" style="margin-top:16px;">
+          <div class="stat-tile"><div class="value" id="stat-week-closed">–</div><div class="label">Closed this week</div></div>
+          <div class="stat-tile"><div class="value" id="stat-month-closed">–</div><div class="label">Closed this month</div></div>
+          <div class="stat-tile"><div class="value" id="stat-week-calls">–</div><div class="label">Calls this week</div></div>
+          <div class="stat-tile"><div class="value" id="stat-month-escalated">–</div><div class="label">Escalated this month</div></div>
+          <div class="stat-tile"><div class="value" id="stat-streak">–</div><div class="label">🔥 Current streak</div></div>
+          <div class="stat-tile"><div class="value" id="stat-weighted">–</div><div class="label">Weighted score (month)</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 8px;">🏅 Achievements</h3>
+        <div id="badges-list" style="display:flex; gap:10px; flex-wrap:wrap;"></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 4px;">Targets</h3>
+        <div id="targets-list"></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 4px;">Recent cases</h3>
+        <p class="hint" style="margin:0 0 10px;">Last 20 cases assigned to or closed by this agent.</p>
+        <table id="cases-table">
+          <thead><tr><th>Case #</th><th>Customer</th><th>Status</th><th>Assigned/Closed</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop hidden" id="edit-modal-backdrop">
+    <div class="modal">
+      <h3>Edit agent</h3>
+      <form id="edit-agent-form">
+        <div class="form-row">
+          <label for="edit-full-name">Full name</label>
+          <input id="edit-full-name" required />
+        </div>
+        <div class="form-row">
+          <label for="edit-email">Email</label>
+          <input id="edit-email" type="email" required />
+          <p class="hint">Changes their login email too, not just the display name shown here.</p>
+        </div>
+        <div class="form-row">
+          <label for="edit-role">Role</label>
+          <select id="edit-role">
+            <option value="agent">Agent</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="edit-password">Reset password (optional)</label>
+          <input id="edit-password" type="text" minlength="8" placeholder="Leave blank to keep current password" />
+        </div>
+        <p class="error-text hidden" id="edit-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="edit-cancel-btn">Cancel</button>
+          <button type="submit" class="btn" id="edit-save-btn">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { statusBadge } from '/js/caseHelpers.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
+    import { weightedScore, fetchEscalationStats, computeStreak } from '/js/gamification.js';
+
+    const profile = await requireRole(['admin']);
+    const agentId = new URLSearchParams(window.location.search).get('id');
+    let agent = null;
+
+    if (profile) {
+      subscribeToNotifications(profile.id);
+      if (!agentId) {
+        document.getElementById('load-error').textContent = 'No agent specified.';
+        document.getElementById('load-error').classList.remove('hidden');
+      } else {
+        await loadAgent();
+      }
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      signOut();
+    });
+
+    function startOfWeek(d = new Date()) {
+      const date = new Date(d); date.setHours(0, 0, 0, 0);
+      const day = (date.getDay() + 6) % 7;
+      date.setDate(date.getDate() - day);
+      return date;
+    }
+    function startOfMonth(d = new Date()) {
+      return new Date(d.getFullYear(), d.getMonth(), 1);
+    }
+    function addPeriod(date, period) {
+      const d = new Date(date);
+      if (period === 'day') d.setDate(d.getDate() + 1);
+      else if (period === 'week') d.setDate(d.getDate() + 7);
+      else d.setMonth(d.getMonth() + 1);
+      return d;
+    }
+
+    async function metricValue(metric, from, to) {
+      if (metric === 'cases_closed') {
+        const { count } = await supabase.from('cases').select('id', { count: 'exact', head: true })
+          .eq('closed_by', agentId).gte('closed_at', from.toISOString()).lt('closed_at', to.toISOString());
+        return count || 0;
+      }
+      if (metric === 'cases_interacted') {
+        const { data } = await supabase.from('case_notes').select('case_id')
+          .eq('user_id', agentId).gte('created_at', from.toISOString()).lt('created_at', to.toISOString());
+        return new Set((data || []).map(n => n.case_id)).size;
+      }
+      const { data } = await supabase.from('call_logs').select('calls_taken')
+        .eq('agent_id', agentId).gte('call_date', from.toISOString().slice(0, 10)).lt('call_date', to.toISOString().slice(0, 10));
+      return (data || []).reduce((s, r) => s + r.calls_taken, 0);
+    }
+
+    async function loadAgent() {
+      const errorEl = document.getElementById('load-error');
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, role, is_active, teams(name), departments(name)')
+        .eq('id', agentId)
+        .single();
+
+      if (error || !data) {
+        document.getElementById('agent-name').textContent = 'Agent not found.';
+        errorEl.textContent = error?.message || 'This agent could not be loaded.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      agent = data;
+      document.getElementById('agent-name').textContent = agent.full_name || agent.email;
+      document.getElementById('agent-meta').textContent =
+        [agent.email, agent.role, agent.teams?.name, agent.departments?.name, agent.is_active ? 'Active' : 'Disabled']
+          .filter(Boolean).join(' · ');
+
+      await Promise.all([loadStats(), loadStreakAndBadges(), loadTargets(), loadRecentCases()]);
+    }
+
+    async function loadStats() {
+      const now = new Date();
+      const weekStart = startOfWeek(now);
+      const monthStart = startOfMonth(now);
+
+      const [weekClosed, monthClosed, weekCalls, monthEscalated, monthInteracted, escStats] = await Promise.all([
+        metricValue('cases_closed', weekStart, now),
+        metricValue('cases_closed', monthStart, now),
+        metricValue('calls_taken', weekStart, now),
+        (async () => {
+          const { count } = await supabase.from('cases').select('id', { count: 'exact', head: true })
+            .eq('assigned_to', agentId).gte('escalated_at', monthStart.toISOString());
+          return count || 0;
+        })(),
+        metricValue('cases_interacted', monthStart, now),
+        fetchEscalationStats(agentId, monthStart.toISOString(), now.toISOString()),
+      ]);
+
+      document.getElementById('stat-week-closed').textContent = weekClosed;
+      document.getElementById('stat-month-closed').textContent = monthClosed;
+      document.getElementById('stat-week-calls').textContent = weekCalls;
+      document.getElementById('stat-month-escalated').textContent = monthEscalated;
+      document.getElementById('stat-weighted').textContent = weightedScore({
+        closed: monthClosed, interacted: monthInteracted, escClosed: escStats.escClosed, escBreached: escStats.escBreached,
+      });
+    }
+
+    async function loadStreakAndBadges() {
+      const { data: settings } = await supabase.from('org_settings').select('daily_target').eq('id', true).maybeSingle();
+      const { streak } = await computeStreak(agentId, settings?.daily_target || 30);
+      document.getElementById('stat-streak').textContent = streak > 0 ? `${streak} day${streak === 1 ? '' : 's'}` : '—';
+
+      const { data } = await supabase.from('badges').select('badge_key, label, earned_at')
+        .eq('agent_id', agentId).order('earned_at', { ascending: false });
+      const list = document.getElementById('badges-list');
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No badges earned yet.</p>';
+        return;
+      }
+      list.innerHTML = data.map(b =>
+        `<span class="badge blue" title="Earned ${new Date(b.earned_at).toLocaleDateString()}">${b.label}</span>`
+      ).join('');
+    }
+
+    async function loadTargets() {
+      const { data } = await supabase.from('targets').select('id, metric, period, target_value, created_at')
+        .eq('agent_id', agentId).order('created_at', { ascending: false });
+      const list = document.getElementById('targets-list');
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No individual targets set — following the team default.</p>';
+        return;
+      }
+      const metricLabel = { cases_closed: 'Cases closed', cases_interacted: 'Cases interacted', calls_taken: 'Calls taken' };
+      list.innerHTML = data.map(t =>
+        `<div style="padding:6px 0; border-bottom:1px solid var(--border);">${metricLabel[t.metric] || t.metric}: <strong>${t.target_value}</strong> per ${t.period}</div>`
+      ).join('');
+    }
+
+    async function loadRecentCases() {
+      const { data, error } = await supabase
+        .from('cases')
+        .select('id, case_number, customer_name, status, assigned_to, closed_by, created_at, closed_at')
+        .or(`assigned_to.eq.${agentId},closed_by.eq.${agentId}`)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      const tbody = document.querySelector('#cases-table tbody');
+      tbody.innerHTML = '';
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="4" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="hint">No cases on record for this agent.</td></tr>';
+        return;
+      }
+      for (const c of data) {
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        const activity = c.closed_by === agentId && c.closed_at
+          ? `Closed ${new Date(c.closed_at).toLocaleDateString()}`
+          : `Assigned · ${new Date(c.created_at).toLocaleDateString()}`;
+        tr.innerHTML = `
+          <td>${c.case_number}</td>
+          <td>${c.customer_name || '—'}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td class="hint">${activity}</td>
+        `;
+        tr.addEventListener('click', () => { window.location.href = `/agent/case.html?id=${c.id}`; });
+        tbody.appendChild(tr);
+      }
+    }
+
+    // ---- Edit / Delete (same manage-agent edge function as admin/users.html) ----
+    const editModal = document.getElementById('edit-modal-backdrop');
+    document.getElementById('edit-btn').addEventListener('click', () => {
+      if (!agent) return;
+      document.getElementById('edit-error').classList.add('hidden');
+      document.getElementById('edit-full-name').value = agent.full_name || '';
+      document.getElementById('edit-email').value = agent.email;
+      document.getElementById('edit-role').value = agent.role;
+      document.getElementById('edit-password').value = '';
+      editModal.classList.remove('hidden');
+    });
+    document.getElementById('edit-cancel-btn').addEventListener('click', () => editModal.classList.add('hidden'));
+
+    document.getElementById('edit-agent-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('edit-error');
+      errorEl.classList.add('hidden');
+      const saveBtn = document.getElementById('edit-save-btn');
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+
+      const payload = {
+        action: 'update',
+        id: agentId,
+        full_name: document.getElementById('edit-full-name').value.trim(),
+        email: document.getElementById('edit-email').value.trim(),
+        role: document.getElementById('edit-role').value,
+      };
+      const newPassword = document.getElementById('edit-password').value;
+      if (newPassword) payload.password = newPassword;
+
+      try {
+        const { data: result, error: fnError } = await supabase.functions.invoke('manage-agent', { body: payload });
+        if (fnError) {
+          const message = (await fnError.context?.json?.().catch(() => null))?.error || fnError.message;
+          throw new Error(message || 'Failed to update agent');
+        }
+        if (result?.error) throw new Error(result.error);
+
+        editModal.classList.add('hidden');
+        await loadAgent();
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove('hidden');
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save changes';
+      }
+    });
+
+    document.getElementById('delete-btn').addEventListener('click', async () => {
+      if (!agent) return;
+      if (agentId === profile.id) {
+        alert("You can't delete your own account.");
+        return;
+      }
+      if (!confirm(`Delete agent "${agent.full_name}"? This removes their login entirely. Cases, notes, or audit history still linked to them will block the delete — reassign or delete those first, or disable the account instead.`)) return;
+
+      const { data: result, error: fnError } = await supabase.functions.invoke('manage-agent', {
+        body: { action: 'delete', id: agentId },
+      });
+      if (fnError) {
+        const message = (await fnError.context?.json?.().catch(() => null))?.error || fnError.message;
+        alert(message || 'Failed to delete agent');
+        return;
+      }
+      if (result?.error) {
+        alert(result.error);
+        return;
+      }
+      window.location.href = '/admin/users.html';
+    });
+  </script>
+</body>
+</html>
