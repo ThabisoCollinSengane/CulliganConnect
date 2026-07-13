@@ -27,9 +27,17 @@
     </aside>
 
     <main class="main">
+      <div class="card" id="fill-panel-card">
+        <h2 style="margin:0 0 4px;">Fill in your details</h2>
+        <p class="hint" style="margin:0 0 12px;">Type the account number, task number or other details once — every template below fills in and updates live as you type.</p>
+        <div id="fill-panel-fields" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0 14px;">
+          <p class="hint">Load a template below to see its fill-in fields here.</p>
+        </div>
+      </div>
+
       <div class="card">
         <h2 style="margin:0 0 4px;">Team templates</h2>
-        <p class="hint">Default canned responses set up by your admin. Hit <strong>Use</strong>, fill in the account number, task number or other details, and copy the generated email into Outlook/Teams.</p>
+        <p class="hint">Default canned responses set up by your admin, filled in live from the panel above. Hit <strong>Copy</strong> to copy the filled email, or <strong>Copy raw</strong> for the unfilled version.</p>
       </div>
       <div id="shared-templates-list"></div>
 
@@ -68,6 +76,7 @@
           <div style="display:flex; gap:10px; align-items:center; margin-top:14px;">
             <button type="submit" class="btn" id="qn-save">Save note</button>
             <button type="button" class="btn secondary hidden" id="qn-cancel-edit">Cancel edit</button>
+            <span class="success-text hidden" id="qn-saved-msg">✓ Note saved.</span>
           </div>
         </form>
         <div id="quick-notes-list" style="margin-top:16px;"></div>
@@ -102,21 +111,6 @@
           <button type="submit" class="btn">Save</button>
         </div>
       </form>
-    </div>
-  </div>
-
-  <div class="modal-backdrop hidden" id="use-modal-backdrop">
-    <div class="modal" style="max-width:640px;">
-      <h3 id="use-modal-title">Use template</h3>
-      <p class="hint">Fill in the details below — the email is generated as you type. Your name is filled in for you.</p>
-      <div id="use-fields"></div>
-      <label>Preview</label>
-      <div id="use-preview" style="background:var(--light-blue); border-radius:8px; padding:14px 16px; white-space:pre-wrap; font-size:0.9rem; max-height:280px; overflow-y:auto;"></div>
-      <p class="success-text hidden" id="use-copied">Copied to clipboard — paste it into Outlook/Teams.</p>
-      <div class="modal-actions">
-        <button type="button" class="btn secondary" id="use-cancel">Close</button>
-        <button type="button" class="btn" id="use-copy">Copy email</button>
-      </div>
     </div>
   </div>
 
@@ -159,6 +153,14 @@
 
     const profile = await requireRole(['agent', 'admin']);
     let myQuickNotes = [];
+    let templateCards = []; // [{ card, t }] for the currently-rendered shared+own templates
+    const AUTO_FILL = {
+      'YOUR NAME': () => profile.full_name || '',
+      'NAME': () => profile.full_name || '',
+      'AGENT NAME': () => profile.full_name || '',
+      'TODAY': () => new Date().toLocaleDateString('en-GB'),
+      'DATE TODAY': () => new Date().toLocaleDateString('en-GB'),
+    };
     if (profile) {
       subscribeToNotifications(profile.id);
       await Promise.all([loadTemplates(), loadEscalationTemplates(), loadQuickNotes(), loadReminders()]);
@@ -284,53 +286,7 @@
       signOut();
     });
 
-    // ---- Templates ----
-    function renderTemplateCard(t, { editable }) {
-      const card = document.createElement('div');
-      card.className = 'card';
-      card.innerHTML = `
-        <div class="toolbar">
-          <div>
-            <h3 style="margin:0;">${t.name}</h3>
-            <span class="hint">${t.category || 'Uncategorised'}</span>
-          </div>
-          <div style="display:flex; gap:8px;">
-            <button class="btn use-btn">Use</button>
-            <button class="btn secondary copy-btn">Copy raw</button>
-            ${editable ? '<button class="btn secondary delete-btn">Delete</button>' : ''}
-          </div>
-        </div>
-        <p class="hint" style="font-weight:600;">${t.subject}</p>
-        <p style="white-space:pre-wrap;">${t.body}</p>
-        <p class="success-text hidden">Copied to clipboard.</p>
-      `;
-      card.querySelector('.use-btn').addEventListener('click', () => openUseModal(t));
-      card.querySelector('.copy-btn').addEventListener('click', async () => {
-        const ok = await copyToClipboard(`${t.subject}\n\n${t.body}`);
-        const successEl = card.querySelector('.success-text');
-        successEl.textContent = ok ? 'Copied to clipboard.' : 'Could not copy — copy manually.';
-        successEl.classList.remove('hidden');
-        setTimeout(() => successEl.classList.add('hidden'), 3000);
-      });
-      if (editable) {
-        card.querySelector('.delete-btn').addEventListener('click', async () => {
-          if (!confirm(`Delete "${t.name}"?`)) return;
-          await supabase.from('email_templates').delete().eq('id', t.id);
-          await loadTemplates();
-        });
-      }
-      return card;
-    }
-
-    // ---- Use-template flow: detect [PLACEHOLDER] / {TOKEN} fields, fill, generate ----
-    const AUTO_FILL = {
-      'YOUR NAME': () => profile.full_name || '',
-      'NAME': () => profile.full_name || '',
-      'AGENT NAME': () => profile.full_name || '',
-      'TODAY': () => new Date().toLocaleDateString('en-GB'),
-      'DATE TODAY': () => new Date().toLocaleDateString('en-GB'),
-    };
-
+    // ---- Templates: detect [PLACEHOLDER] / {TOKEN} fields, fill, generate ----
     function extractPlaceholders(text) {
       const found = [];
       for (const m of text.matchAll(/\[([^\[\]\n]{1,60})\]|\{(\w{1,40})\}/g)) {
@@ -348,20 +304,23 @@
       });
     }
 
-    let useTemplate = null;
-    const useModal = document.getElementById('use-modal-backdrop');
+    // One shared fill-in panel drives every Team/My template preview below —
+    // type the details once, every card updates live as you type, instead of
+    // a separate "Use" modal per template.
+    function fillPanelValues() {
+      const values = {};
+      document.querySelectorAll('#fill-panel-fields input').forEach(input => {
+        values[input.dataset.placeholder] = input.value.trim();
+      });
+      return values;
+    }
 
-    function openUseModal(t) {
-      useTemplate = t;
-      document.getElementById('use-modal-title').textContent = `Use: ${t.name}`;
-      document.getElementById('use-copied').classList.add('hidden');
-
-      const full = `${t.subject}\n${t.body}`;
-      const placeholders = extractPlaceholders(full);
-      const fieldsEl = document.getElementById('use-fields');
+    function renderFillPanel(placeholders) {
+      const fieldsEl = document.getElementById('fill-panel-fields');
+      const previous = fillPanelValues();
       fieldsEl.innerHTML = placeholders.length
         ? ''
-        : '<p class="hint">This template has no fill-in fields — just copy it.</p>';
+        : '<p class="hint">No fill-in fields found in your templates yet.</p>';
 
       for (const key of placeholders) {
         const wrap = document.createElement('div');
@@ -370,40 +329,65 @@
         label.textContent = key.charAt(0) + key.slice(1).toLowerCase();
         const input = document.createElement('input');
         input.dataset.placeholder = key;
-        input.value = AUTO_FILL[key.toUpperCase()]?.() ?? '';
+        input.value = previous[key] ?? AUTO_FILL[key.toUpperCase()]?.() ?? '';
+        input.addEventListener('input', refreshTemplatePreviews);
         wrap.append(label, input);
         fieldsEl.appendChild(wrap);
       }
-
-      fieldsEl.querySelectorAll('input').forEach(input => input.addEventListener('input', renderUsePreview));
-      renderUsePreview();
-      useModal.classList.remove('hidden');
     }
 
-    function currentUseValues() {
-      const values = {};
-      document.querySelectorAll('#use-fields input').forEach(input => {
-        values[input.dataset.placeholder] = input.value.trim();
+    function refreshTemplatePreviews() {
+      const values = fillPanelValues();
+      for (const { card, t } of templateCards) {
+        card.querySelector('.subject-preview').textContent = fillPlaceholders(t.subject, values);
+        card.querySelector('.body-preview').textContent = fillPlaceholders(t.body, values);
+      }
+    }
+
+    function renderTemplateCard(t, { editable }) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="toolbar">
+          <div>
+            <h3 style="margin:0;">${t.name}</h3>
+            <span class="hint">${t.category || 'Uncategorised'}</span>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn copy-btn">Copy</button>
+            <button class="btn secondary copy-raw-btn">Copy raw</button>
+            ${editable ? '<button class="btn secondary delete-btn">Delete</button>' : ''}
+          </div>
+        </div>
+        <p class="hint subject-preview" style="font-weight:600;"></p>
+        <p class="body-preview" style="white-space:pre-wrap;"></p>
+        <p class="success-text hidden">Copied to clipboard.</p>
+      `;
+      card.querySelector('.copy-btn').addEventListener('click', async () => {
+        const values = fillPanelValues();
+        const ok = await copyToClipboard(`${fillPlaceholders(t.subject, values)}\n\n${fillPlaceholders(t.body, values)}`);
+        const successEl = card.querySelector('.success-text');
+        successEl.textContent = ok ? 'Copied to clipboard.' : 'Could not copy — copy manually.';
+        successEl.classList.remove('hidden');
+        setTimeout(() => successEl.classList.add('hidden'), 3000);
       });
-      return values;
+      card.querySelector('.copy-raw-btn').addEventListener('click', async () => {
+        const ok = await copyToClipboard(`${t.subject}\n\n${t.body}`);
+        const successEl = card.querySelector('.success-text');
+        successEl.textContent = ok ? 'Raw template copied to clipboard.' : 'Could not copy — copy manually.';
+        successEl.classList.remove('hidden');
+        setTimeout(() => successEl.classList.add('hidden'), 3000);
+      });
+      if (editable) {
+        card.querySelector('.delete-btn').addEventListener('click', async () => {
+          if (!confirm(`Delete "${t.name}"?`)) return;
+          await supabase.from('email_templates').delete().eq('id', t.id);
+          await loadTemplates();
+        });
+      }
+      templateCards.push({ card, t });
+      return card;
     }
-
-    function generatedEmail() {
-      const values = currentUseValues();
-      return `${fillPlaceholders(useTemplate.subject, values)}\n\n${fillPlaceholders(useTemplate.body, values)}`;
-    }
-
-    function renderUsePreview() {
-      document.getElementById('use-preview').textContent = generatedEmail();
-    }
-
-    document.getElementById('use-cancel').addEventListener('click', () => useModal.classList.add('hidden'));
-    document.getElementById('use-copy').addEventListener('click', async () => {
-      const ok = await copyToClipboard(generatedEmail());
-      const el = document.getElementById('use-copied');
-      el.textContent = ok ? 'Copied to clipboard — paste it into Outlook/Teams.' : 'Could not copy — copy from the preview manually.';
-      el.classList.remove('hidden');
-    });
 
     async function loadTemplates() {
       const { data, error } = await supabase.from('email_templates').select('*').order('category').order('name');
@@ -411,6 +395,7 @@
       const ownList = document.getElementById('own-templates-list');
       sharedList.innerHTML = '';
       ownList.innerHTML = '';
+      templateCards = [];
 
       if (error) {
         sharedList.innerHTML = `<p class="error-text">${error.message}</p>`;
@@ -425,6 +410,15 @@
 
       ownList.innerHTML = own.length ? '' : '<div class="card"><p class="hint">You haven\'t added any personal templates yet.</p></div>';
       own.forEach(t => ownList.appendChild(renderTemplateCard(t, { editable: true })));
+
+      const allPlaceholders = [];
+      for (const t of [...shared, ...own]) {
+        for (const key of extractPlaceholders(`${t.subject}\n${t.body}`)) {
+          if (!allPlaceholders.includes(key)) allPlaceholders.push(key);
+        }
+      }
+      renderFillPanel(allPlaceholders);
+      refreshTemplatePreviews();
     }
 
     const templateModal = document.getElementById('template-modal-backdrop');
@@ -540,6 +534,10 @@
     document.getElementById('note-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const id = document.getElementById('qn-id').value;
+      const saveBtn = document.getElementById('qn-save');
+      const savedMsg = document.getElementById('qn-saved-msg');
+      savedMsg.classList.add('hidden');
+      saveBtn.disabled = true;
       const payload = {
         note: document.getElementById('qn-text').value,
         customer_name: document.getElementById('qn-customer').value.trim() || null,
@@ -554,12 +552,15 @@
         ? await supabase.from('quick_notes').update(payload).eq('id', id)
         : await supabase.from('quick_notes').insert({ ...payload, user_id: profile.id });
 
+      saveBtn.disabled = false;
       if (error) {
         alert(error.message);
         return;
       }
       loadNoteIntoForm(null);
       await loadQuickNotes();
+      savedMsg.classList.remove('hidden');
+      setTimeout(() => savedMsg.classList.add('hidden'), 4000);
     });
 
     // ---- Standalone reminders ----

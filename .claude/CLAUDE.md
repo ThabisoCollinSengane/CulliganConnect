@@ -1511,3 +1511,81 @@ button relabels to "Update note", a "Cancel edit" link appears) rather than open
 Functionally this is the same insert/update logic verified working in v22 and v24 — this update is
 UI-only, but re-verified end-to-end with a click-test regardless (fill → Save → correct `quick_notes`
 insert payload, zero modal element in the DOM at all).
+
+---
+
+🛠️ v27 Update – Shared template fill panel, Notepad save confirmation, escalation template
+auto-show, and a template for every escalation reason (2026-07-13)
+
+Four fixes from one screenshot-backed feedback message, worked in order of how concrete/isolated
+each one was.
+
+**Every escalation reason now has a template.** `escalation_reasons` had 9 active rows but
+`escalation_templates` only covered 4 of them — "Incorrect Order", "Missing / Incomplete Order",
+"Other", "Over SLA – Dispenser Install", and "Over SLA – Dispenser Service/Repair" had none, so any
+agent escalating for one of those five reasons hit "No template configured for this reason yet —
+ask your admin." (Confirmed via `execute_sql` against the real table, matching exactly what the
+screenshots showed — this was a genuine data gap, not a UI bug.) Seeded the five missing rows via
+`apply_migration`, matching the existing four's tone, structure, and token vocabulary
+(`{ACCOUNT}`/`{TASK}`/`{WORKORDER}`/`{SLADATE}`/`{QTY}`/`{NAME}`/`{CUSTOMER}`/`{UPDATE}`). Re-verified
+with an RLS-simulated `select` as a real agent: all 9 reasons now return exactly one template each.
+
+**Notepad "Save note" wasn't actually broken — it gave zero confirmation that it worked.** Traced
+the "it doesn't save, it gets lost" report all the way through: the insert payload, the RLS policies
+(`user_id = auth.uid()`), the table constraints, and a real RLS-simulated insert against production
+all check out fine, and the click-test harness shows the exact right `quick_notes` insert firing.
+What actually happens is the form silently clears and the textarea goes blank the instant Save
+succeeds — with no success message, no modal closing, nothing — which reads exactly like data loss
+if you're not scrolling down to notice the note reappeared at the top of the list below. Every other
+save flow on this page (add-own-template, etc.) has some unambiguous "it worked" signal; the Notepad
+didn't. Added a `✓ Note saved.` `.success-text` message next to the Save button (shown for 4s after
+a successful insert/update, matching the pattern used elsewhere), plus disabling the button for the
+duration of the request so a slow save can't be mistaken for a no-op either.
+
+**Escalation template card now shows itself.** `agent/case.html`'s template card previously required
+clicking "👀 Show escalation template" every single time, even though a reason is *already* selected
+by default the moment the escalation fields appear (browsers default a `<select>` to its first
+`<option>`, and now every reason has a template per the fix above). Added `autoPreviewTemplate()`,
+called whenever the escalation fields become visible (status switched to "Escalated", or landing via
+"Create and escalate case"'s prefill) and whenever the reason `<select>` changes — so the template is
+just *there*, no click required, for every situation. The button is now a real **Show/Hide toggle**
+(`updatePreviewBtnLabel()` keeps its label in sync with the card's visibility) instead of a one-way
+reveal. Also fixed a latent ordering bug this surfaced: `loadCase()` used to call
+`maybePrefillEscalation()` (which now fires an async auto-preview) and then unconditionally await
+`renderTemplateCard()` right after — since the case isn't saved yet during a prefill,
+`renderTemplateCard()`'s guard (`currentCase.status !== 'escalated'`) would synchronously hide the
+card the auto-preview had just started loading, and only worked by luck because the network
+round-trip resolved after that synchronous hide. `maybePrefillEscalation()` now returns whether it
+prefilled, and `loadCase()` only calls `renderTemplateCard()` when it didn't, so there's exactly one
+code path driving the card's visibility at a time. Also cleaned up the stale-hint bug spotted in a
+screenshot: switching status away from "Escalated" now clears `#template-preview-hint` instead of
+leaving "No template configured..." showing under an unrelated status.
+
+**Team/My templates: one shared fill-in panel instead of a "Use" modal per card.** Previously every
+template card showed its raw, unfilled `[PLACEHOLDER]`/`{TOKEN}` text, and filling one in meant
+opening a modal, per template, every time. Added a "Fill in your details" card at the top of the
+page whose fields are the **union of every distinct placeholder** found across all loaded shared +
+own templates (`extractPlaceholders` over `subject\nbody` for each, de-duplicated) — type an account
+number once and it fills into every card below that uses `[ACCOUNT NUMBER]`, live, on every
+keystroke. `YOUR NAME`/`NAME`/`AGENT NAME` and `TODAY`/`DATE TODAY` still auto-fill from
+`AUTO_FILL` the moment the panel builds, same as the old modal did. Each card now has **Copy**
+(copies the filled text) alongside the existing **Copy raw** (unfilled, for pasting into an editor).
+Removed `openUseModal`/`use-modal-backdrop` and everything under it entirely — the escalation
+templates section's own separate "Use template" modal (`openEscalationUse`/`esc-use-backdrop`) is
+untouched, since it already worked this way (one shared per-template form) and wasn't part of this
+complaint.
+
+Building this hit the exact TDZ bug class documented in v20/v21/v24: `let templateCards = []`
+(tracking `{card, t}` pairs so the panel can refresh every card's preview without rebuilding the
+DOM) and `const AUTO_FILL = {...}` were both declared *after* `loadTemplates()` in the file, but
+`loadTemplates()` is one of four calls inside the top-level `Promise.all([...])` that runs before
+the script reaches those declarations — so both threw `ReferenceError: Cannot access '...' before
+initialization` the instant `loadTemplates()` ran, which (uncaught, top-level, module script) halted
+every remaining top-level statement in the file, including the reminder/note-form/escalation-modal
+`addEventListener` calls near the bottom. `scan.js`'s empty-seed sweep didn't catch it — it only
+renders the "no templates yet" placeholder path, never the actual card-building code — so this was
+caught by a dedicated click-test seeded with real template rows instead, which is exactly the blind
+spot the v22 postmortem flagged. Fixed by moving both declarations above the `Promise.all` call,
+alongside `myQuickNotes`. Re-verified against real production `email_templates` content (mixed
+`[BRACKET]` styles including a `[DATE/TIME]` placeholder with a slash in it, plus one template with
+zero placeholders at all) and the full 13-page `scan.js` sweep — both clean.
