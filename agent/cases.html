@@ -54,8 +54,13 @@
           </select>
           <select id="type-filter" style="flex:1; min-width:160px;"></select>
         </div>
+        <div class="toolbar" id="bulk-toolbar" style="background:var(--light-blue); padding:10px 14px; border-radius:8px; margin-bottom:12px;">
+          <span class="hint"><span id="selected-count">0</span> selected</span>
+          <button class="btn secondary" id="bulk-delete-btn" style="color:var(--red, #c0392b);">Delete selected</button>
+        </div>
+
         <table id="cases-table">
-          <thead><tr><th>Case #</th><th>Account #</th><th>Customer</th><th>Type</th><th>Status</th><th>Escalation</th><th>Assigned to</th></tr></thead>
+          <thead><tr><th><input type="checkbox" id="select-all" style="width:auto;" /></th><th>Case #</th><th>Account #</th><th>Customer</th><th>Type</th><th>Status</th><th>Escalation</th><th>Assigned to</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -214,7 +219,7 @@
 
       let query = supabase
         .from('cases')
-        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, case_types(name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
+        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, assigned_to, case_types(name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
         .order('created_at', { ascending: false })
         .limit(100);
 
@@ -253,9 +258,11 @@
         const escalationCell = countdown
           ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
           : '<span class="hint">—</span>';
+        const isMine = c.assigned_to === profile.id;
         const tr = document.createElement('tr');
         tr.style.cursor = 'pointer';
         tr.innerHTML = `
+          <td>${isMine ? `<input type="checkbox" class="row-select" data-id="${c.id}" style="width:auto;" />` : ''}</td>
           <td>${c.case_number}</td>
           <td>${c.account_number || '—'}</td>
           <td>${c.customer_name || '—'}</td>
@@ -264,12 +271,36 @@
           <td>${escalationCell}</td>
           <td>${c.assigned_agent?.full_name || '—'}</td>
         `;
+        tr.querySelector('.row-select')?.addEventListener('click', (e) => e.stopPropagation());
+        tr.querySelector('.row-select')?.addEventListener('change', updateSelectedCount);
         tr.addEventListener('click', () => {
           window.location.href = `/agent/case.html?id=${c.id}`;
         });
         tbody.appendChild(tr);
       }
+      updateSelectedCount();
     }
+
+    function updateSelectedCount() {
+      document.getElementById('selected-count').textContent = document.querySelectorAll('.row-select:checked').length;
+    }
+
+    document.getElementById('select-all').addEventListener('click', (e) => e.stopPropagation());
+    document.getElementById('select-all').addEventListener('change', (e) => {
+      document.querySelectorAll('.row-select').forEach(cb => { cb.checked = e.target.checked; });
+      updateSelectedCount();
+    });
+
+    document.getElementById('bulk-delete-btn').addEventListener('click', async () => {
+      const ids = Array.from(document.querySelectorAll('.row-select:checked')).map(cb => cb.dataset.id);
+      if (ids.length === 0) return;
+      if (!confirm(`Delete ${ids.length} case(s) assigned to you? This also removes their notes, attachments, and history. This can't be undone.`)) return;
+
+      const { error } = await supabase.from('cases').delete().in('id', ids);
+      if (error) { alert(error.message); return; }
+      document.getElementById('select-all').checked = false;
+      await Promise.all([loadCases(), loadSubmissionHistory()]);
+    });
 
     async function loadSubmissionHistory() {
       const { data, error } = await supabase

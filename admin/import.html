@@ -58,6 +58,21 @@
         </table>
       </div>
 
+      <div class="card hidden" id="review-card">
+        <h3 style="margin:0 0 4px;">Review rows</h3>
+        <p class="hint">If you copied the whole Salesforce page instead of just the table, stray rows like search boxes or column headers can sneak in here as fake cases — <strong id="flagged-count">0</strong> row(s) below look like that and are unchecked by default. Only checked rows get imported.</p>
+        <div style="display:flex; gap:14px; align-items:center; margin:10px 0;">
+          <label style="margin:0; display:flex; align-items:center; gap:6px;"><input type="checkbox" id="review-select-all" checked style="width:auto;" /> Select all</label>
+          <span class="hint"><span id="review-selected-count">0</span> of <span id="review-total-count">0</span> will be imported</span>
+        </div>
+        <div style="max-height:360px; overflow-y:auto;">
+          <table id="review-table">
+            <thead><tr><th></th><th>#</th><th>Case number</th><th>Customer/Account</th><th>Other mapped fields</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card hidden" id="distribute-card">
         <h3 style="margin:0 0 4px;">Distribute</h3>
         <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;">
@@ -182,9 +197,12 @@
       });
 
       parsed = { header, rows };
+      rowIncluded = rows.map(() => true);
       renderMapping();
+      renderReviewTable();
       document.getElementById('parse-summary').textContent = `${rows.length} case(s) across ${cols} column(s).`;
       document.getElementById('mapping-card').classList.remove('hidden');
+      document.getElementById('review-card').classList.remove('hidden');
       document.getElementById('distribute-card').classList.remove('hidden');
     });
 
@@ -212,34 +230,118 @@
         `;
         tbody.appendChild(tr);
       });
+      // Re-checking column mapping changes which rows look like junk, so the
+      // review step below needs to recompute against the new mapping too.
+      tbody.querySelectorAll('select').forEach(sel => sel.addEventListener('change', () => {
+        rowIncluded = parsed.rows.map(() => true);
+        renderReviewTable();
+      }));
     }
 
-    function buildCases() {
+    function currentMapping() {
       const mapping = {};
       document.querySelectorAll('#mapping-table select').forEach(sel => {
         if (sel.value) mapping[sel.value] = Number(sel.dataset.col);
       });
-      return parsed.rows.map(r => {
-        const c = {};
-        for (const [field, col] of Object.entries(mapping)) {
-          const val = r[col];
-          if (val === undefined || val === '') continue;
-          if (field === 'quantity') { const n = parseInt(val, 10); if (Number.isFinite(n)) c.quantity = n; }
-          else if (field === 'sla_date') { const d = new Date(val); if (!isNaN(d)) c.sla_date = d.toISOString().slice(0, 10); }
-          else if (field === 'case_type') {
-            // Route by case type: resolve the matching department + our case type.
-            const deptName = deptNameForCaseType(val);
-            c._departmentId = deptName ? (deptByName[deptName] || null) : null;
-            const firstWord = val.trim().split(/\s+/)[0].toLowerCase();
-            const ct = caseTypes.find(t => t.name.toLowerCase().startsWith(firstWord));
-            if (ct) c.case_type_id = ct.id;
-            c._caseTypeLabel = val;
-          }
-          else c[field] = val;
-        }
-        return c;
-      }).filter(c => Object.keys(c).some(k => !k.startsWith('_')));
+      return mapping;
     }
+
+    function buildCaseFromRow(mapping, r) {
+      const c = {};
+      for (const [field, col] of Object.entries(mapping)) {
+        const val = r[col];
+        if (val === undefined || val === '') continue;
+        if (field === 'quantity') { const n = parseInt(val, 10); if (Number.isFinite(n)) c.quantity = n; }
+        else if (field === 'sla_date') { const d = new Date(val); if (!isNaN(d)) c.sla_date = d.toISOString().slice(0, 10); }
+        else if (field === 'case_type') {
+          // Route by case type: resolve the matching department + our case type.
+          const deptName = deptNameForCaseType(val);
+          c._departmentId = deptName ? (deptByName[deptName] || null) : null;
+          const firstWord = val.trim().split(/\s+/)[0].toLowerCase();
+          const ct = caseTypes.find(t => t.name.toLowerCase().startsWith(firstWord));
+          if (ct) c.case_type_id = ct.id;
+          c._caseTypeLabel = val;
+        }
+        else c[field] = val;
+      }
+      return c;
+    }
+
+    function buildCases() {
+      const mapping = currentMapping();
+      return parsed.rows
+        .filter((_, i) => rowIncluded[i])
+        .map(r => buildCaseFromRow(mapping, r))
+        .filter(c => Object.keys(c).some(k => !k.startsWith('_')));
+    }
+
+    // ---- Review: catch stray non-case rows (search boxes, headers, sort
+    // labels, etc.) that sneak in when the whole Salesforce page gets copied
+    // instead of just the case table — these looked like real cases once
+    // parsed (e.g. a case number field full of "Search this list...") and
+    // silently created junk cases in production, so every row is now shown
+    // before import with obvious junk unchecked by default. ----
+    const JUNK_PATTERNS = [
+      /search this list/i, /^select item\b/i, /^sorted:?\s/i, /^sorted by\b/i,
+      /^\d+\s+items?\b/i, /^updated\s+\d+\s+(minute|hour|day)/i, /^filtered by\b/i,
+      /security requirements/i, /see what.?s changing/i, /^change owner$/i,
+      /^search\.\.\.$/i,
+    ];
+
+    function isLikelyJunkRow(caseFields, rawRow) {
+      const meaningfulFields = Object.keys(caseFields).filter(k => !k.startsWith('_'));
+      if (meaningfulFields.length < 2) return true;
+      return rawRow.some(cell => JUNK_PATTERNS.some(re => re.test(cell)));
+    }
+
+    let rowIncluded = [];
+
+    function renderReviewTable() {
+      const mapping = currentMapping();
+      const tbody = document.querySelector('#review-table tbody');
+      tbody.innerHTML = '';
+      let flagged = 0;
+
+      parsed.rows.forEach((r, i) => {
+        const c = buildCaseFromRow(mapping, r);
+        const junk = isLikelyJunkRow(c, r);
+        if (junk) { flagged++; rowIncluded[i] = false; }
+
+        const otherFields = Object.entries(c)
+          .filter(([k]) => !k.startsWith('_') && k !== 'external_case_number' && k !== 'customer_name')
+          .map(([, v]) => v).join(' · ');
+
+        const tr = document.createElement('tr');
+        if (junk) tr.style.background = 'var(--light-blue)';
+        tr.innerHTML = `
+          <td><input type="checkbox" class="review-row-select" data-idx="${i}" ${rowIncluded[i] ? 'checked' : ''} style="width:auto;" /></td>
+          <td class="hint">${i + 1}</td>
+          <td>${c.external_case_number || '<span class="hint">—</span>'}</td>
+          <td>${c.customer_name || '<span class="hint">—</span>'}</td>
+          <td class="hint" style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${otherFields || (junk ? '⚠ looks like page text, not a case' : '—')}</td>
+        `;
+        tr.querySelector('.review-row-select').addEventListener('change', (e) => {
+          rowIncluded[i] = e.target.checked;
+          updateReviewCounts();
+        });
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('flagged-count').textContent = flagged;
+      document.getElementById('review-select-all').checked = rowIncluded.every(Boolean);
+      updateReviewCounts();
+    }
+
+    function updateReviewCounts() {
+      document.getElementById('review-total-count').textContent = parsed.rows.length;
+      document.getElementById('review-selected-count').textContent = rowIncluded.filter(Boolean).length;
+    }
+
+    document.getElementById('review-select-all').addEventListener('change', (e) => {
+      rowIncluded = parsed.rows.map(() => e.target.checked);
+      document.querySelectorAll('.review-row-select').forEach(cb => { cb.checked = e.target.checked; });
+      updateReviewCounts();
+    });
 
     // ---- Distribution ----
     function roundRobin(pool, n) {
@@ -329,7 +431,7 @@
       errorEl.classList.add('hidden');
       document.getElementById('import-success').classList.add('hidden');
       const cases = buildCases();
-      if (!cases.length) { errorEl.textContent = 'No cases parsed — check the column mapping.'; errorEl.classList.remove('hidden'); return; }
+      if (!cases.length) { errorEl.textContent = 'No cases to import — check the column mapping and make sure at least one row is checked in Review rows.'; errorEl.classList.remove('hidden'); return; }
       try {
         const assignment = await computeAssignment(cases);
         const counts = {};
@@ -352,7 +454,7 @@
       successEl.classList.add('hidden');
 
       const cases = buildCases();
-      if (!cases.length) { errorEl.textContent = 'No cases parsed — check the column mapping.'; errorEl.classList.remove('hidden'); return; }
+      if (!cases.length) { errorEl.textContent = 'No cases to import — check the column mapping and make sure at least one row is checked in Review rows.'; errorEl.classList.remove('hidden'); return; }
 
       const btn = document.getElementById('import-btn');
       btn.disabled = true; btn.textContent = 'Importing…';

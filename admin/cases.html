@@ -62,6 +62,7 @@
           <div style="display:flex; gap:8px; align-items:center;">
             <select id="bulk-agent-select" style="width:220px;"></select>
             <button class="btn secondary" id="bulk-assign-btn">Assign selected</button>
+            <button class="btn secondary" id="bulk-delete-btn" style="color:var(--red, #c0392b);">Delete selected</button>
           </div>
         </div>
 
@@ -205,6 +206,17 @@
       if (ids.length === 0 || !agentId) return;
 
       await supabase.from('cases').update({ assigned_to: agentId }).in('id', ids);
+      await loadCases();
+      document.getElementById('select-all').checked = false;
+    });
+
+    document.getElementById('bulk-delete-btn').addEventListener('click', async () => {
+      const ids = Array.from(document.querySelectorAll('.row-select:checked')).map(cb => cb.dataset.id);
+      if (ids.length === 0) return;
+      if (!confirm(`Delete ${ids.length} case(s)? This also removes their notes, attachments, and history. This can't be undone.`)) return;
+
+      const { error } = await supabase.from('cases').delete().in('id', ids);
+      if (error) { alert(error.message); return; }
       await loadCases();
       document.getElementById('select-all').checked = false;
     });
