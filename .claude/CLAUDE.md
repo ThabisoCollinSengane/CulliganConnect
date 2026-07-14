@@ -1757,3 +1757,54 @@ Playwright click-tests for the wave input's persist-on-blur, the agent filter's 
 in-query-filtering, and the trend chart's hover/crosshair/tooltip/table-toggle against both
 synthetic multi-week data and the true empty-data case; screenshots of the redesigned chart in
 light and dark mode; the full 14-page `scan.js` sweep — all clean.
+
+---
+
+🤝 v30 Update – Team escalation visibility, priority ordering, visible note mentions
+(2026-07-14)
+
+User framed all three of these around one theme, verbatim: "that's the whole point of the tool" —
+agents following up on each other's work, not working in "my cases only" silos.
+
+**Unified team escalations view.** `agent/index.html`'s "My Day" table was always filtered to
+`assigned_to = profile.id` — an agent had no way to see escalations sitting with someone else
+without manually flipping two filters on the Cases page (Whole team + Escalated). Added a new
+"🚨 Escalated cases — whole team" card, right up near the top of My Day, showing *every* escalated
+case regardless of who it's assigned to, with a "View all" link and one-click
+"🚨 Escalated (whole team)" quick-filter button added to `agent/cases.html` itself (sets both
+filters in one click instead of two). Nothing here changes who's *allowed* to act on a case —
+`agents_update_own_escalated_or_unassigned` already let any agent touch an escalated case — this
+closes the visibility gap that made that permission practically undiscoverable.
+
+**Case lists now sort by what needs attention, not by recency.** Every case table (`agent/cases.html`,
+`admin/cases.html`, the My Day and new team-escalations widgets) sorted by `created_at desc` — a
+newly-created low-priority case could bury an old, over-SLA urgent one. Added
+`sortCasesByPriority()` to `js/caseHelpers.js`: open cases first (further split by over-SLA — a
+plain string comparison against today's date, since `sla_date` is a DATE — then by
+`priority` rank urgent → high → normal), closed/resolved last, `created_at desc` as the final
+tiebreak. Sorted client-side after the existing `.order('created_at', ...).limit(N)` fetch rather
+than pushing this into a DB view/RPC — every affected list already fetches a capped, reasonably-
+sized batch, so re-sorting client-side is cheap and avoids a schema change for what's fundamentally
+a display-ordering concern, not a query-scoping one.
+
+**Case-note @mentions are now actually visible.** Turned out `case_mentions` ("Tag a colleague" on
+a case note) already existed end-to-end — insert on note submit, a DB trigger
+(`notify_case_mention`) firing a real notification — but a note itself never showed *who* got
+tagged. Reading a case's note thread gave zero indication any tagging had happened; the only trace
+was a notification that scrolls off My Day. Added a `🔔 Tagged: <name>` chip directly on the note
+in `agent/case.html`'s note thread. Doing this surfaced a real RLS gap: `case_mentions`' only SELECT
+policy was `mentioned_user = auth.uid() OR mentioned_by = auth.uid()` — fine for "did someone tag
+*me*", but wrong for "show this chip to anyone reading the note," since a third agent (neither
+tagger nor tagged) browsing the same case would have the mention silently vanish under RLS even
+though the note itself is globally readable (`case_notes` already has `agents_read_all_notes`).
+Added `agents_read_all_case_mentions` (any authenticated user) so the chip renders the same for
+everyone — verified with an RLS-simulated insert-as-agent-A-tagging-agent-B, then a same-transaction
+select as an uninvolved agent-C, confirming the mention is now visible to a party who was
+previously blind to it.
+
+Verified: RLS-simulated case_mentions visibility check (rolled back); Playwright click-tests for
+the priority sort order on both `agent/cases.html` and `admin/cases.html` (four seeded cases —
+closed/normal/over-SLA/urgent — landing in the exact expected order), the team-escalated quick-
+filter button, the team-escalations widget rendering against seeded cross-agent data (screenshotted),
+and the mention chip rendering from a seeded `case_mentions` embed; the full 14-page `scan.js`
+sweep — clean.

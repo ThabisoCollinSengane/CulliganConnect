@@ -42,6 +42,39 @@ export function escalationCountdown(expiresAt) {
   return { label, className: 'green' };
 }
 
+const OPEN_STATUSES_EXCLUDE = new Set(['closed', 'resolved']);
+const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2 };
+
+export function isOverSla(c) {
+  if (!c.sla_date || OPEN_STATUSES_EXCLUDE.has(c.status)) return false;
+  // sla_date is a plain DATE — compare against today's date, not the current
+  // instant, so a case due today doesn't read as "over" until tomorrow.
+  return c.sla_date < new Date().toISOString().slice(0, 10);
+}
+
+// Case list ordering used across agent/cases.html, admin/cases.html, and
+// agent/index.html's "My Day": open cases first (over-SLA, then priority),
+// closed/resolved cases last — so the thing needing action is always on top.
+export function sortCasesByPriority(cases) {
+  return [...cases].sort((a, b) => {
+    const aOpen = !OPEN_STATUSES_EXCLUDE.has(a.status);
+    const bOpen = !OPEN_STATUSES_EXCLUDE.has(b.status);
+    if (aOpen !== bOpen) return aOpen ? -1 : 1;
+
+    if (aOpen) {
+      const aOver = isOverSla(a);
+      const bOver = isOverSla(b);
+      if (aOver !== bOver) return aOver ? -1 : 1;
+
+      const aRank = PRIORITY_RANK[a.priority] ?? PRIORITY_RANK.normal;
+      const bRank = PRIORITY_RANK[b.priority] ?? PRIORITY_RANK.normal;
+      if (aRank !== bRank) return aRank - bRank;
+    }
+
+    return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+  });
+}
+
 // Replaces {TOKEN} placeholders in an escalation_templates subject/body.
 export function fillTemplate(text, values) {
   if (!text) return '';

@@ -62,6 +62,18 @@
         </div>
       </div>
 
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">🚨 Escalated cases — whole team</h3>
+          <a class="btn secondary" href="/agent/cases.html?status=escalated&mine=0">View all</a>
+        </div>
+        <p class="hint" style="margin:0 0 8px;">Anyone can follow up — escalations aren't just the assigned agent's problem to solve alone.</p>
+        <table id="team-escalations-table">
+          <thead><tr><th>Case #</th><th>Customer</th><th>Assigned to</th><th>Escalation</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
       <div class="card hidden" id="due-reminders-card" style="border-left:4px solid var(--orange);">
         <h3 style="margin:0 0 4px;">⏰ Due reminders</h3>
         <p class="hint" style="margin:0 0 8px;">These are due now. Click a detail to copy it.</p>
@@ -130,7 +142,7 @@
     import { supabase } from '/js/supabaseClient.js';
     import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
-    import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
+    import { statusBadge, escalationCountdown, sortCasesByPriority } from '/js/caseHelpers.js';
     import { timeGreeting, motivationalLine } from '/js/greeting.js';
     import { subscribeToNotifications } from '/js/notifications.js';
     import { weightedScore, fetchEscalationStats, computeStreak, checkAndAwardBadges } from '/js/gamification.js';
@@ -164,6 +176,7 @@
         loadTodayStats(),
         loadNotifications(),
         loadMyDay(),
+        loadTeamEscalations(),
         loadTodayMood(),
         loadCallsToday(),
         loadMiniLeaderboard(),
@@ -530,11 +543,10 @@
     async function loadMyDay() {
       const { data, error } = await supabase
         .from('cases')
-        .select('id, case_number, customer_name, status, escalation_expires_at, sla_date')
+        .select('id, case_number, customer_name, status, escalation_expires_at, sla_date, priority, created_at')
         .eq('assigned_to', profile.id)
         .not('status', 'in', '("closed","resolved")')
-        .order('status', { ascending: false })
-        .order('escalation_expires_at', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: false })
         .limit(25);
 
       const tbody = document.querySelector('#my-day-table tbody');
@@ -549,7 +561,7 @@
         return;
       }
 
-      for (const c of data) {
+      for (const c of sortCasesByPriority(data)) {
         const countdown = escalationCountdown(c.escalation_expires_at);
         const escalationCell = countdown
           ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
@@ -562,6 +574,50 @@
           <td>${statusBadge(c.status)}</td>
           <td>${escalationCell}</td>
           <td>${c.sla_date || '—'}</td>
+        `;
+        tr.addEventListener('click', () => {
+          window.location.href = `/agent/case.html?id=${c.id}`;
+        });
+        tbody.appendChild(tr);
+      }
+    }
+
+    // A unified view of every escalated case, not just the ones assigned to
+    // this agent — escalation follow-up is meant to be a team effort, so any
+    // agent should be able to see and pick one up regardless of who it's
+    // assigned to.
+    async function loadTeamEscalations() {
+      const { data, error } = await supabase
+        .from('cases')
+        .select('id, case_number, customer_name, escalation_expires_at, priority, sla_date, created_at, assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
+        .eq('status', 'escalated')
+        .order('created_at', { ascending: false })
+        .limit(25);
+
+      const tbody = document.querySelector('#team-escalations-table tbody');
+      tbody.innerHTML = '';
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="4" class="error-text">${error.message}</td></tr>`;
+        return;
+      }
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="hint">No escalated cases right now — nice and quiet.</td></tr>';
+        return;
+      }
+
+      for (const c of sortCasesByPriority(data)) {
+        const countdown = escalationCountdown(c.escalation_expires_at);
+        const escalationCell = countdown
+          ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
+          : '<span class="hint">—</span>';
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.innerHTML = `
+          <td>${c.case_number}</td>
+          <td>${c.customer_name || '—'}</td>
+          <td>${c.assigned_agent?.full_name || '<span class="hint">Unassigned</span>'}</td>
+          <td>${escalationCell}</td>
         `;
         tr.addEventListener('click', () => {
           window.location.href = `/agent/case.html?id=${c.id}`;

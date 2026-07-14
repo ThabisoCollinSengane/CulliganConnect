@@ -53,6 +53,7 @@
             <option value="closed">Closed</option>
           </select>
           <select id="type-filter" style="flex:1; min-width:160px;"></select>
+          <button type="button" class="btn secondary" id="team-escalated-btn" style="white-space:nowrap;">🚨 Escalated (whole team)</button>
         </div>
         <div class="toolbar" id="bulk-toolbar" style="background:var(--light-blue); padding:10px 14px; border-radius:8px; margin-bottom:12px;">
           <span class="hint"><span id="selected-count">0</span> selected</span>
@@ -142,7 +143,7 @@
     import { supabase } from '/js/supabaseClient.js';
     import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
-    import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
+    import { statusBadge, escalationCountdown, sortCasesByPriority } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['agent', 'admin']);
@@ -176,6 +177,15 @@
     document.getElementById('mine-filter').addEventListener('change', loadCases);
     document.getElementById('status-filter').addEventListener('change', loadCases);
     document.getElementById('type-filter').addEventListener('change', loadCases);
+
+    // One click to see every escalated case across the whole team, not just
+    // your own — escalations are exactly the case where anyone should be
+    // able to jump in and follow up, not wait on whoever it's assigned to.
+    document.getElementById('team-escalated-btn').addEventListener('click', () => {
+      document.getElementById('mine-filter').value = 'all';
+      document.getElementById('status-filter').value = 'escalated';
+      loadCases();
+    });
 
     document.addEventListener('keydown', (e) => {
       const tag = document.activeElement?.tagName;
@@ -219,7 +229,7 @@
 
       let query = supabase
         .from('cases')
-        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, assigned_to, case_types(name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
+        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, assigned_to, priority, sla_date, created_at, case_types(name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
         .order('created_at', { ascending: false })
         .limit(100);
 
@@ -253,7 +263,7 @@
         return;
       }
 
-      for (const c of data) {
+      for (const c of sortCasesByPriority(data)) {
         const countdown = escalationCountdown(c.escalation_expires_at);
         const escalationCell = countdown
           ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
