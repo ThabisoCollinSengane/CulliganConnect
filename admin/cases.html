@@ -84,7 +84,7 @@
     import { supabase } from '/js/supabaseClient.js';
     import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
-    import { statusBadge, escalationCountdown } from '/js/caseHelpers.js';
+    import { statusBadge, escalationCountdown, sortCasesByPriority } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['admin']);
@@ -145,7 +145,7 @@
 
       let query = supabase
         .from('cases')
-        .select('id, case_number, customer_name, status, escalation_expires_at, assigned_to, department_id, case_types(name)')
+        .select('id, case_number, customer_name, status, escalation_expires_at, assigned_to, department_id, priority, sla_date, created_at, case_types(name)')
         .order('created_at', { ascending: false })
         .limit(150);
 
@@ -169,7 +169,7 @@
         return;
       }
 
-      for (const c of data) {
+      for (const c of sortCasesByPriority(data)) {
         const countdown = escalationCountdown(c.escalation_expires_at);
         const escalationCell = countdown
           ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
