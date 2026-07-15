@@ -246,6 +246,20 @@
       document.getElementById('calls-amount').focus();
     });
 
+    // Auto-refresh the priority case list + team-escalations widget every 5
+    // minutes so an idle dashboard stays current even if a Realtime event was
+    // missed — but only while the tab is visible, so a backgrounded tab doesn't
+    // keep querying. Also refresh immediately when the tab regains focus.
+    function refreshLiveWidgets() {
+      if (document.visibilityState !== 'visible') return;
+      loadMyDay();
+      loadTeamEscalations();
+    }
+    setInterval(refreshLiveWidgets, 5 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshLiveWidgets();
+    });
+
     // ---- Customer interaction quick-log (non-case contacts) ----
     let interactionTypes = [];
     let interactionMetaLoaded = false;
