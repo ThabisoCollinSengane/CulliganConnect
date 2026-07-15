@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Knowledge base – Culligan X CustomConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> Culligan X CustomConnect · Admin</div>
+    <nav>
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/import.html">Import</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/templates.html">Templates</a>
+      <a href="/admin/kb.html" class="active">Knowledge Base</a>
+      <a href="/admin/reports.html">Reports</a>
+      <a href="/admin/settings.html">Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/admin/index.html">Dashboard</a>
+      <a href="/admin/cases.html">Cases</a>
+      <a href="/admin/import.html">Import</a>
+      <a href="/admin/users.html">Agents</a>
+      <a href="/admin/templates.html">Templates</a>
+      <a href="/admin/kb.html" class="active">Knowledge Base</a>
+      <a href="/admin/reports.html">Reports</a>
+      <a href="/admin/settings.html">Departments &amp; Setup</a>
+      <a href="/admin/audit-log.html">Audit Log</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <div class="toolbar">
+          <h2 style="margin:0;">📚 Knowledge base</h2>
+          <button class="btn" id="new-article-btn">+ New article</button>
+        </div>
+        <p class="hint">Curate the team's reference articles. Write in Markdown; attach the original PDF/Word/Excel source if there is one.</p>
+      </div>
+
+      <div class="card hidden" id="editor-card">
+        <h3 id="editor-heading" style="margin:0 0 12px;">New article</h3>
+        <input type="hidden" id="kb-id" />
+        <div style="display:grid; grid-template-columns:2fr 1fr; gap:0 14px;">
+          <div class="form-row"><label>Title</label><input id="kb-title" required /></div>
+          <div class="form-row"><label>Category</label><input id="kb-category" placeholder="e.g. Swaps" /></div>
+        </div>
+        <div class="form-row"><label>Tags (comma-separated)</label><input id="kb-tags" placeholder="swap, process, depot" /></div>
+        <div class="form-row">
+          <label>Content (Markdown)</label>
+          <textarea id="kb-content" rows="12" style="font-family: ui-monospace, monospace;"></textarea>
+          <p class="hint"># Heading · **bold** · *italic* · `code` · - bullet · [link](https://…)</p>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button class="btn" id="kb-save">Save article</button>
+          <button class="btn secondary" id="kb-cancel">Cancel</button>
+          <span class="success-text hidden" id="kb-saved">✓ Saved.</span>
+          <span class="error-text hidden" id="kb-error"></span>
+        </div>
+
+        <div id="attachments-section" class="hidden" style="margin-top:20px; border-top:1px solid var(--border); padding-top:16px;">
+          <div class="toolbar">
+            <h4 style="margin:0;">📎 Attachments</h4>
+            <label class="btn secondary" style="margin:0; cursor:pointer;">
+              Upload file<input type="file" id="kb-file-input" style="display:none;" />
+            </label>
+          </div>
+          <p class="hint">The original source document (PDF, Word, Excel…). Max 10&nbsp;MB.</p>
+          <p class="error-text hidden" id="kb-file-error"></p>
+          <div id="kb-attachments-list" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <table id="kb-articles-table">
+          <thead><tr><th>Title</th><th>Category</th><th>Tags</th><th>Updated</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
+
+    const profile = await requireRole(['admin']);
+    if (profile) {
+      subscribeToNotifications(profile.id);
+      await loadArticles();
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => { e.preventDefault(); signOut(); });
+
+    function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+    async function loadArticles() {
+      const { data, error } = await supabase.from('kb_articles')
+        .select('id, title, category, tags, updated_at').order('updated_at', { ascending: false });
+      const tbody = document.querySelector('#kb-articles-table tbody');
+      tbody.innerHTML = '';
+      if (error) { tbody.innerHTML = `<tr><td colspan="5" class="error-text">${escapeHtml(error.message)}</td></tr>`; return; }
+      if (!data || data.length === 0) { tbody.innerHTML = '<tr><td colspan="5" class="hint">No articles yet.</td></tr>'; return; }
+      for (const a of data) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${escapeHtml(a.title)}</td>
+          <td>${a.category ? escapeHtml(a.category) : '—'}</td>
+          <td>${(a.tags || []).map(t => `<span class="badge blue" style="margin-right:3px;">${escapeHtml(t)}</span>`).join('') || '—'}</td>
+          <td class="hint">${new Date(a.updated_at).toLocaleDateString()}</td>
+          <td style="white-space:nowrap;">
+            <button class="btn secondary edit-btn" data-id="${a.id}" style="padding:2px 10px;">Edit</button>
+            <button class="btn secondary del-btn" data-id="${a.id}" data-title="${escapeHtml(a.title)}" style="padding:2px 10px; color:var(--red, #c0392b);">Delete</button>
+          </td>`;
+        tr.querySelector('.edit-btn').addEventListener('click', () => openEditor(a.id));
+        tr.querySelector('.del-btn').addEventListener('click', async () => {
+          if (!confirm(`Delete "${a.title}"? This also removes its attachments.`)) return;
+          const { error: delErr } = await supabase.from('kb_articles').delete().eq('id', a.id);
+          if (delErr) { alert(delErr.message); return; }
+          if (document.getElementById('kb-id').value === a.id) closeEditor();
+          await loadArticles();
+        });
+        tbody.appendChild(tr);
+      }
+    }
+
+    const editorCard = document.getElementById('editor-card');
+    document.getElementById('new-article-btn').addEventListener('click', () => openEditor(null));
+    document.getElementById('kb-cancel').addEventListener('click', closeEditor);
+
+    function closeEditor() { editorCard.classList.add('hidden'); }
+
+    async function openEditor(id) {
+      document.getElementById('kb-error').classList.add('hidden');
+      document.getElementById('kb-saved').classList.add('hidden');
+      const attachSection = document.getElementById('attachments-section');
+
+      if (!id) {
+        document.getElementById('editor-heading').textContent = 'New article';
+        document.getElementById('kb-id').value = '';
+        document.getElementById('kb-title').value = '';
+        document.getElementById('kb-category').value = '';
+        document.getElementById('kb-tags').value = '';
+        document.getElementById('kb-content').value = '';
+        attachSection.classList.add('hidden'); // attachments need a saved article
+      } else {
+        const { data: a } = await supabase.from('kb_articles').select('*').eq('id', id).single();
+        if (!a) return;
+        document.getElementById('editor-heading').textContent = 'Edit article';
+        document.getElementById('kb-id').value = a.id;
+        document.getElementById('kb-title').value = a.title;
+        document.getElementById('kb-category').value = a.category || '';
+        document.getElementById('kb-tags').value = (a.tags || []).join(', ');
+        document.getElementById('kb-content').value = a.content || '';
+        attachSection.classList.remove('hidden');
+        await loadAttachments(a.id);
+      }
+      editorCard.classList.remove('hidden');
+      editorCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById('kb-title').focus();
+    }
+
+    document.getElementById('kb-save').addEventListener('click', async () => {
+      const errorEl = document.getElementById('kb-error');
+      const savedEl = document.getElementById('kb-saved');
+      errorEl.classList.add('hidden'); savedEl.classList.add('hidden');
+      const title = document.getElementById('kb-title').value.trim();
+      if (!title) { errorEl.textContent = 'Title is required.'; errorEl.classList.remove('hidden'); return; }
+
+      const payload = {
+        title,
+        category: document.getElementById('kb-category').value.trim() || null,
+        tags: document.getElementById('kb-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+        content: document.getElementById('kb-content').value,
+      };
+      const id = document.getElementById('kb-id').value;
+
+      const saveBtn = document.getElementById('kb-save');
+      saveBtn.disabled = true;
+      let error, savedId = id;
+      if (id) {
+        ({ error } = await supabase.from('kb_articles').update(payload).eq('id', id));
+      } else {
+        const { data, error: insErr } = await supabase.from('kb_articles')
+          .insert({ ...payload, created_by: profile.id }).select('id').single();
+        error = insErr;
+        savedId = data?.id;
+      }
+      saveBtn.disabled = false;
+      if (error) { errorEl.textContent = error.message; errorEl.classList.remove('hidden'); return; }
+
+      savedEl.classList.remove('hidden');
+      setTimeout(() => savedEl.classList.add('hidden'), 3000);
+      // Re-open in edit mode so attachments become available for a brand-new article.
+      if (!id && savedId) await openEditor(savedId);
+      await loadArticles();
+    });
+
+    async function loadAttachments(articleId) {
+      const { data } = await supabase.from('kb_attachments')
+        .select('id, file_name, storage_path, size_bytes').eq('article_id', articleId).order('created_at');
+      const list = document.getElementById('kb-attachments-list');
+      if (!data || data.length === 0) { list.innerHTML = '<p class="hint">No files attached.</p>'; return; }
+      list.innerHTML = '';
+      for (const f of data) {
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:6px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:10px; align-items:center;';
+        row.innerHTML = `<a href="#" class="open-file">${escapeHtml(f.file_name)}</a>
+          <button class="btn secondary del-file" style="padding:2px 10px;">Delete</button>`;
+        row.querySelector('.open-file').addEventListener('click', async (e) => {
+          e.preventDefault();
+          const { data: signed, error } = await supabase.storage.from('kb-files').createSignedUrl(f.storage_path, 300);
+          if (error || !signed?.signedUrl) { alert(error?.message || 'Could not open file.'); return; }
+          window.open(signed.signedUrl, '_blank');
+        });
+        row.querySelector('.del-file').addEventListener('click', async () => {
+          if (!confirm(`Delete "${f.file_name}"?`)) return;
+          await supabase.storage.from('kb-files').remove([f.storage_path]);
+          await supabase.from('kb_attachments').delete().eq('id', f.id);
+          await loadAttachments(articleId);
+        });
+        list.appendChild(row);
+      }
+    }
+
+    document.getElementById('kb-file-input').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      const errorEl = document.getElementById('kb-file-error');
+      errorEl.classList.add('hidden');
+      const articleId = document.getElementById('kb-id').value;
+      if (!file || !articleId) return;
+      if (file.size > 10 * 1024 * 1024) { errorEl.textContent = 'File is over 10 MB.'; errorEl.classList.remove('hidden'); return; }
+
+      const safeName = file.name.replace(/[^\w.\-()\s]/g, '_');
+      const path = `${articleId}/${Date.now()}-${safeName}`;
+      const { error: upErr } = await supabase.storage.from('kb-files').upload(path, file, { contentType: file.type || 'application/octet-stream' });
+      if (upErr) { errorEl.textContent = upErr.message; errorEl.classList.remove('hidden'); return; }
+      const { error: metaErr } = await supabase.from('kb_attachments').insert({
+        article_id: articleId, uploaded_by: profile.id, file_name: file.name,
+        storage_path: path, content_type: file.type || null, size_bytes: file.size,
+      });
+      if (metaErr) { await supabase.storage.from('kb-files').remove([path]); errorEl.textContent = metaErr.message; errorEl.classList.remove('hidden'); return; }
+      await loadAttachments(articleId);
+    });
+  </script>
+</body>
+</html>

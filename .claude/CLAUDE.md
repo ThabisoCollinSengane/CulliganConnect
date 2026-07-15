@@ -1908,3 +1908,58 @@ team-wide and is **blocked** from adding an interaction type (caught, nothing le
 type and reads/inserts interactions; post-check confirmed **zero** leaked rows; empty-data load scan
 of all touched pages (agent index/case, admin settings/reports) — no console errors, no TDZ halt;
 Supabase security advisors show no new RLS gaps.
+
+---
+
+📚 v33 Update – Internal knowledge base (#13) (2026-07-15)
+
+Third batch off the improvements list: a searchable, admin-curated knowledge base so standard
+answers live in one place and agents don't have to escalate to a team leader for "how do I…".
+
+**Schema** (`20260715140000_knowledge_base.sql`):
+- `kb_articles` — `title`, `content` (Markdown), `category`, `tags text[]`, `created_by`,
+  timestamps, and a **generated `tsvector` `search_vector`** (title weighted A, category B, body C)
+  with a GIN index for real full-text search. Agents read; admins write (`is_admin()`); GIN index
+  on `tags` too. `set_updated_at` trigger.
+- `kb_attachments` + a private **`kb-files` storage bucket** for the original source document
+  (PDF/Word/Excel). Metadata rows are team-readable; **only admins** upload/delete (bucket policies
+  gate `storage.objects` on `is_admin()`); files served via short-lived signed URLs — mirrors the
+  `case-attachments` pattern.
+
+**Safe Markdown renderer** (`js/markdown.js`, new shared module): tiny, dependency-free, and
+**XSS-safe by construction** — every input is HTML-escaped *first*, then a small set of constructs
+(headings, bold/italic, inline + fenced code, bullet lists, http(s)-only links) is applied. A
+`<script>` or `javascript:` link can never execute. This was the deliberate alternative to pulling a
+Markdown library in via CDN, which the no-build/no-bundler app avoids.
+
+**Agent KB** (`agent/kb.html`, new): full-text search (`.textSearch('search_vector', …,
+{type:'websearch'})`), category + tag filters (built from all articles' metadata), a results list,
+and a detail view that renders the Markdown safely and lists downloadable attachments.
+
+**Admin KB** (`admin/kb.html`, new): create/edit/delete articles (title, category, comma-separated
+tags, Markdown body) via an inline editor; attachments become available once an article is saved
+(a brand-new article re-opens in edit mode so files can be attached to its id); upload/list/delete
+files against the `kb-files` bucket.
+
+**Navigation**: added a "Knowledge"/"Knowledge Base" link to the header nav **and** sidebar of every
+agent page (My Day, Cases, Case, Templates, Settings) and every admin page (Dashboard, Cases,
+Import, Agents, Templates, Reports, Setup, Audit Log, Agent detail), so it's discoverable everywhere,
+matching the existing per-page duplicated-nav convention.
+
+**Deliberately deferred**: the improvements doc's "import from PDF/Word/Excel with client-side text
+extraction" — that needs heavy client-side parsing libraries (pdf.js / mammoth / SheetJS), which
+this bundler-free app can't pull in cleanly, and it's a meaningfully separate chunk. The current
+build instead lets admins **upload the original file** (downloadable by agents) *and* write the
+article body as Markdown — the core "one searchable source of truth" value, without the parsing
+dependency. Flagged as a clear follow-up.
+
+Verified: node test of `renderMarkdown` — headings/bold/lists/code render correctly, `<script>` and
+`javascript:`/`onerror` are neutralised (escaped, not executed), http(s) links render with
+`rel="noopener noreferrer"`; Playwright mock-harness DOM tests — agent list renders, article detail
+shows rendered Markdown with the XSS payload safely escaped, admin list renders, "New article"
+opens the editor and Save fires an insert with tags split + `created_by` set, Edit populates every
+field and reveals the attachments section; RLS-simulated (rolled back) — admin creates an article,
+agent reads it, agent full-text search matches via `websearch_to_tsquery`, agent is **blocked** from
+writing (nothing leaked); post-check confirmed **zero** leaked rows and the `kb-files` bucket
+present; empty-data load scan of the two new pages plus all nav-touched pages — no console errors,
+no TDZ halt; Supabase security advisors show no new RLS gaps.
