@@ -2013,3 +2013,14 @@ empty, no test notes, no reopened cases) and the cron job registered; Playwright
 grid renders Times reopened + First touched; empty-data load scan of all pages clean; security
 advisors show the two new functions locked down (no client-executable `SECURITY DEFINER` surface
 introduced).
+
+---
+
+🔄 v35 Update – Auto-refresh My Day (2026-07-15)
+
+Improvements-list item #7. `agent/index.html` now refreshes the priority case list (`loadMyDay`) and
+the team-escalations widget (`loadTeamEscalations`) every 5 minutes, so an idle dashboard stays
+current even if a Realtime event was missed. Gated on `document.visibilityState === 'visible'` so a
+backgrounded tab doesn't keep querying, and it also refreshes immediately on the `visibilitychange`
+back to visible. Verified with a Playwright test — a visible transition fires both loads (+2 cases
+queries) with no errors; empty-data scan of all pages clean.
