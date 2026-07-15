@@ -1808,3 +1808,59 @@ closed/normal/over-SLA/urgent — landing in the exact expected order), the team
 filter button, the team-escalations widget rendering against seeded cross-agent data (screenshotted),
 and the mention chip rendering from a seeded `case_mentions` embed; the full 14-page `scan.js`
 sweep — clean.
+
+---
+
+⚡ v31 Update – Agent workflow wins: recall, bulk close, quick close, stale nudge,
+quick actions (2026-07-15)
+
+First batch off a broader "in-app improvements" list the user supplied (17 items across stats,
+automation, UX, KB, and interaction-tracking). This batch is the low-risk, high-frequency agent-UX
+subset — **pure frontend, no schema/migration changes** — shipped together:
+
+**One-click "Recall" escalation** (`agent/case.html`). Collapses the 4-step "copy depot email →
+wait for update → copy customer email → close" flow into a single button for when an escalation
+got resolved without needing the emails. Visible only while status is `escalated`; logs an
+internal note `Escalation closed via recall` (note first, so the trail survives even if the close
+is RLS-rejected), then sets status to `closed` — a real UPDATE, so the existing status trigger
+stamps `closed_at`/`closed_by` and it counts toward stats. No external email is sent.
+
+**Bulk close for agents** (`agent/cases.html`). Added a "✅ Close selected" button beside the
+existing "Delete selected" in the bulk toolbar. Only the agent's own rows carry a checkbox (the
+row-render already gated that), so RLS already scopes what can be closed; each is a status UPDATE
+so trigger-stamping is correct. End-of-shift housekeeping without opening each case.
+
+**Submission-history quick close** (`agent/cases.html`). Each open row of "My submission history"
+now has a "Close" button — one click to close a quick submission that's already resolved in
+Salesforce, without opening it. Closed/resolved rows show nothing.
+
+**Stale-case nudge** (`agent/index.html` + `agent/cases.html`). A dismissable banner on My Day:
+"⚠️ You have X cases with no activity for 48+ hours", linking to `cases.html?mine=1&stale=1` which
+filters to exactly those. "Stale" = open case with **no case-row change AND no note within 48h** —
+`cases.updated_at` is trigger-maintained on every UPDATE (status/assignment/edits) but a note
+insert doesn't touch the case row, so both are checked. The definition lives in one shared helper
+(`filterStaleCases`/`staleCutoffIso`/`STALE_HOURS` in `js/caseHelpers.js`) so the My Day count and
+the Cases filter always agree.
+
+**Quick actions card** (`agent/index.html`). A card near the top with "+ Quick case"
+(`cases.html?quick=1` auto-opens the quick modal), "📋 Submission history" (anchors to the history
+card), "🔍 Search cases" (`?focus=search` focuses the search box), and "📞 Log calls" (scrolls to
+and focuses the calls input on the same page). `cases.html` gained `?quick=1`/`?focus=search`
+handling to support the first two.
+
+**Note on #5 (auto-assign on submit):** already the behaviour — both the full and quick submission
+forms in `agent/cases.html` already set `assigned_to: profile.id`. No change needed; called out so
+the batch's scope is honest.
+
+Verified: node ESM unit test of `filterStaleCases` (5-case fixture, exact stale subset); Playwright
+mock-harness DOM tests — bulk close issues `update({status:'closed'}).in(ids)`, quick close issues
+the single update, `?quick=1` opens the modal and `?focus=search` focuses search, recall shows only
+on escalated cases and fires note-insert + close (and is hidden on a `new` case), the My Day nudge
+shows the right count with correct singular/plural and recomputes when a case has a recent note, the
+`cases.html?stale=1` filter renders only stale rows in priority order with a matching banner;
+RLS-simulated (rolled back) as a real agent — recall (internal note + escalated-case close, with
+`closed_at`/`closed_by` stamped) and bulk close of two own cases, both under real RLS; a post-check
+confirmed **zero** leaked rows; empty-data load scan of all four touched pages — no console errors,
+no TDZ halt. One test-harness gotcha re-learned and noted here for next time: Playwright
+`addInitScript` given a **stringified** function never calls it — pass the seed as a serialized
+**arg** to a real function instead (this caused a false "nudge hidden" until fixed).

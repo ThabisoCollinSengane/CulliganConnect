@@ -75,6 +75,29 @@ export function sortCasesByPriority(cases) {
   });
 }
 
+// ---- Stale-case detection (My Day nudge + Cases "stale" filter) ----
+// A case counts as stale when it's still open but nothing has happened on it
+// for a while: no case-row change (cases.updated_at is trigger-maintained on
+// every UPDATE — status, assignment, field edits) AND no note added within the
+// window. Adding a note doesn't touch the case row, so we check both, and the
+// two pages that surface this share one definition so their counts agree.
+export const STALE_HOURS = 48;
+
+export function staleCutoffIso() {
+  return new Date(Date.now() - STALE_HOURS * 3600 * 1000).toISOString();
+}
+
+// openCases: [{ id, updated_at, created_at, status }]; recentlyNotedIds: Set of
+// case ids with at least one note newer than the cutoff. Returns the stale subset.
+export function filterStaleCases(openCases, recentlyNotedIds) {
+  const cutoff = staleCutoffIso();
+  return (openCases || []).filter(c =>
+    !OPEN_STATUSES_EXCLUDE.has(c.status) &&
+    (c.updated_at || c.created_at || '') < cutoff &&
+    !recentlyNotedIds.has(c.id)
+  );
+}
+
 // Replaces {TOKEN} placeholders in an escalation_templates subject/body.
 export function fillTemplate(text, values) {
   if (!text) return '';

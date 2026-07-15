@@ -88,9 +88,11 @@
           </div>
           <button class="btn" id="save-status-btn">Save</button>
           <button class="btn" id="close-case-btn" style="background:var(--green);">✅ Close case</button>
+          <button class="btn secondary hidden" id="recall-escalation-btn" style="white-space:nowrap;">↩️ Recall &amp; close escalation</button>
           <button class="btn secondary hidden" id="assign-me-btn">🙋 Assign to me</button>
         </div>
         <p class="hint" id="close-hint" style="margin-top:8px;">Closing an escalated case ends its SLA timer and counts toward your daily target.</p>
+        <p class="hint hidden" id="recall-hint" style="margin-top:8px;">Recall closes this escalation and logs an internal note — use it when it's been resolved without sending the depot/customer emails.</p>
         <p class="hint hidden" id="template-preview-hint" style="margin-top:8px;"></p>
         <p class="success-text hidden" id="status-success"></p>
         <p class="error-text hidden" id="status-error"></p>
@@ -317,6 +319,12 @@
       // same editable form and Close button sitting there looking untouched.
       document.getElementById('close-hint').classList.toggle('hidden', isClosed);
       document.getElementById('close-case-btn').classList.toggle('hidden', isClosed);
+
+      // Recall is only meaningful on a live escalation — one click to close it
+      // out with an internal note, no depot/customer emails.
+      const isEscalated = currentCase.status === 'escalated';
+      document.getElementById('recall-escalation-btn').classList.toggle('hidden', !isEscalated);
+      document.getElementById('recall-hint').classList.toggle('hidden', !isEscalated);
       document.getElementById('closed-banner').classList.toggle('hidden', !isClosed);
       if (isClosed) {
         const when = currentCase.closed_at ? new Date(currentCase.closed_at).toLocaleString() : '';
@@ -435,6 +443,49 @@
       await loadCase();
       await loadHistory();
       showStatusSuccess('Case closed.');
+    });
+
+    // One-click recall: collapse the whole "copy depot email, wait for update,
+    // copy customer email, then close" flow into a single action for when the
+    // escalation got sorted without needing the emails. Logs an internal note
+    // for the trail, then closes the case (a status UPDATE, so the status
+    // trigger stamps closed_at/closed_by and it counts toward stats).
+    document.getElementById('recall-escalation-btn').addEventListener('click', async () => {
+      if (!currentCase || currentCase.status !== 'escalated') return;
+      if (!confirm(`Recall and close the escalation on case ${currentCase.case_number}? This logs an internal note and closes the case — no depot or customer email is sent.`)) return;
+
+      const errorEl = document.getElementById('status-error');
+      errorEl.classList.add('hidden');
+
+      // Note first so the trail is intact even if the close is rejected by RLS.
+      const { error: noteError } = await supabase.from('case_notes').insert({
+        case_id: caseId,
+        user_id: profile.id,
+        note: 'Escalation closed via recall',
+        note_type: 'internal',
+      });
+      if (noteError) {
+        errorEl.textContent = noteError.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      const { data: updated, error } = await supabase.from('cases')
+        .update({ status: 'closed' }).eq('id', caseId).select('id');
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      if (!updated || updated.length === 0) {
+        errorEl.textContent = 'You can only recall cases assigned to you, or any escalated case. Ask an admin to reassign this one.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      await loadCase();
+      await loadNotes();
+      await loadHistory();
+      showStatusSuccess('Escalation recalled and closed.');
     });
 
     async function renderTemplateCard() {
