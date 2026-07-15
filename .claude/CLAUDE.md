@@ -1963,3 +1963,53 @@ agent reads it, agent full-text search matches via `websearch_to_tsquery`, agent
 writing (nothing leaked); post-check confirmed **zero** leaked rows and the `kb-files` bucket
 present; empty-data load scan of the two new pages plus all nav-touched pages — no console errors,
 no TDZ halt; Supabase security advisors show no new RLS gaps.
+
+---
+
+📈 v34 Update – Stats collection: TTFT, escalation latency, reopen rate, daily rollup (2026-07-15)
+
+Fourth batch off the improvements list (#1–4) — operational metrics that were previously invisible,
+collected at write time by the existing triggers plus a nightly rollup so reporting stays fast.
+
+**New columns** (`20260715160000_stats_collection.sql`):
+- `cases.first_touch_at` — **Time-to-First-Touch** baseline: stamped on the first agent action, i.e.
+  the first status change *or* the first note. (#2)
+- `cases.reopen_count` — incremented whenever a `closed`/`resolved` case moves back to an open
+  status. (#4)
+- `escalation_audit.escalation_latency_hours` — captured when the audit row is written. "Assignment
+  → escalation" is proxied by **created_at → escalated_at** (there is no `assigned_at`, and most
+  cases are assigned at creation). (#3)
+
+**Trigger integration**: folded into the existing `handle_case_status_change` (BEFORE UPDATE on
+`cases`) — first-touch on the first status change, latency into the `escalation_audit` insert,
+reopen increment on the reopen branch — preserving all prior behaviour verbatim. A second small
+trigger (`trg_50_case_first_touch_from_note`, AFTER INSERT on `case_notes`) stamps first-touch from
+the first note (`where first_touch_at is null`, so it's a no-op after that). **Backfilled** all three
+metrics for historical rows (11 cases first-touched, 11 audit rows given latency, reopen counts from
+`case_status_history`).
+
+**Nightly rollup** (#1): `compute_daily_stats(date)` upserts one `daily_stats` row per active agent
+(cases created/closed/interacted, escalated, awaiting, avg response = avg TTFT, avg resolution, SLA
+breaches) — idempotent via the existing `unique(agent_id, date)`. Scheduled with **pg_cron**
+(`nightly-daily-stats`, `30 0 * * *` UTC, computing the day that just ended). `daily_stats` is now
+populated for fast reporting; **switching `admin/reports.html` to read from it** (instead of live
+per-agent queries) is the natural follow-up, left for a later batch.
+
+**UI surface**: `agent/case.html` detail grid now shows **Times reopened** and **First touched**.
+
+**Security follow-through**: the new `SECURITY DEFINER` functions defaulted to being REST-callable
+(`revoke ... from public` alone doesn't drop Supabase's per-role `anon`/`authenticated` grants). A
+corrective migration (`20260715161000_lock_down_stats_functions.sql`) revokes `EXECUTE` from
+`public`/`anon`/`authenticated` on both `compute_daily_stats` (cron-only) and the first-touch trigger
+function — verified via `has_function_privilege` that neither role can call them, and confirmed the
+trigger still fires regardless (triggers don't consult caller EXECUTE grants). Worth remembering: a
+new `public`-schema function is client-callable by default on Supabase.
+
+Verified: RLS-simulated as a real agent (rolled back) — a note stamps `first_touch_at`, a
+close→reopen bumps `reopen_count` to 1, an escalation records `escalation_latency_hours`;
+`compute_daily_stats` run for two dates produced correct per-agent rows (e.g. created 2 / interacted
+1 / escalated 1, avg response 0.05h); post-checks confirmed **zero** leaked rows (`daily_stats`
+empty, no test notes, no reopened cases) and the cron job registered; Playwright DOM test — the case
+grid renders Times reopened + First touched; empty-data load scan of all pages clean; security
+advisors show the two new functions locked down (no client-executable `SECURITY DEFINER` surface
+introduced).

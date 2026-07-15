@@ -303,6 +303,8 @@
         ['Customer email', currentCase.customer_email],
         ['SLA date', currentCase.sla_date],
         ['Times escalated', currentCase.times_escalated],
+        ['Times reopened', currentCase.reopen_count || null],
+        ['First touched', currentCase.first_touch_at ? new Date(currentCase.first_touch_at).toLocaleString() : null],
         ['Service centre', currentCase.service_centres?.name],
         ['Assigned to', currentCase.assigned_agent?.full_name],
         ['Closed at', currentCase.closed_at ? new Date(currentCase.closed_at).toLocaleString() : null],
