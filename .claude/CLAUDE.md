@@ -2024,3 +2024,18 @@ current even if a Realtime event was missed. Gated on `document.visibilityState 
 backgrounded tab doesn't keep querying, and it also refreshes immediately on the `visibilitychange`
 back to visible. Verified with a Playwright test — a visible transition fires both loads (+2 cases
 queries) with no errors; empty-data scan of all pages clean.
+
+---
+
+💬 v36 Update – Quick-reply snippets in case notes (2026-07-15)
+
+Improvements-list item #10 — the last one. `agent/case.html`'s note box gets an "Insert a saved
+reply…" dropdown next to the note-type radios: picking a saved email template drops its body straight
+into the note textarea **at the cursor** (on a new line if there's already text), so an agent doesn't
+switch to the Templates page to copy a canned response. Templates come from `email_templates` via the
+existing `read_shared_or_own_templates` RLS policy (shared team templates + the agent's own) — no
+schema or policy change. The insert fires an `input` event so the existing draft-autosave picks it
+up; the dropdown resets to the placeholder after each insert. Verified with a Playwright test (select
+populated, body inserted after existing text on a new line, dropdown resets, no errors) and the
+empty-data load scan. This closes out every item on the improvements list except the flagged
+`admin/reports.html` → `daily_stats` reporting follow-up.

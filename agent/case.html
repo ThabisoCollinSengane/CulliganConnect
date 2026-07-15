@@ -142,6 +142,9 @@
             <label style="margin:0; display:flex; align-items:center; gap:6px;">
               <input type="radio" name="note-type" value="customer" style="width:auto;" /> Customer-facing
             </label>
+            <select id="insert-snippet" style="width:220px;">
+              <option value="">Insert a saved reply…</option>
+            </select>
             <select id="tag-colleague" style="width:200px;">
               <option value="">Tag a colleague (optional)</option>
             </select>
@@ -247,10 +250,12 @@
     let serviceCentres = [];
 
     async function loadLookups() {
-      const [{ data: reasons }, { data: centres }, { data: colleagues }] = await Promise.all([
+      const [{ data: reasons }, { data: centres }, { data: colleagues }, { data: templates }] = await Promise.all([
         supabase.from('escalation_reasons').select('id, name').eq('is_active', true).order('name'),
         supabase.from('service_centres').select('id, code, name, depot_email, cc_contacts').eq('is_active', true).order('name'),
         supabase.from('profiles').select('id, full_name').eq('is_active', true).order('full_name'),
+        // Shared team templates + this agent's own — RLS returns exactly those.
+        supabase.from('email_templates').select('id, name, body').order('name'),
       ]);
 
       serviceCentres = centres || [];
@@ -260,7 +265,33 @@
         (centres || []).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
       document.getElementById('tag-colleague').innerHTML = '<option value="">Tag a colleague (optional)</option>' +
         (colleagues || []).filter(c => c.id !== profile.id).map(c => `<option value="${c.id}">${c.full_name}</option>`).join('');
+
+      snippetTemplates = templates || [];
+      document.getElementById('insert-snippet').innerHTML = '<option value="">Insert a saved reply…</option>' +
+        snippetTemplates.map(t => `<option value="${t.id}">${(t.name || 'Untitled').replace(/[<>]/g, '')}</option>`).join('');
     }
+
+    // Quick-reply snippets: drop a saved template body straight into the note
+    // box (at the cursor) instead of switching to the Templates page to copy it.
+    let snippetTemplates = [];
+    function insertIntoNote(text) {
+      const ta = document.getElementById('note-text');
+      const start = ta.selectionStart ?? ta.value.length;
+      const end = ta.selectionEnd ?? ta.value.length;
+      const before = ta.value.slice(0, start);
+      const after = ta.value.slice(end);
+      const sep = before && !before.endsWith('\n') ? '\n' : '';
+      ta.value = before + sep + text + after;
+      const pos = (before + sep + text).length;
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+      ta.dispatchEvent(new Event('input')); // let the draft autosave pick it up
+    }
+    document.getElementById('insert-snippet').addEventListener('change', (e) => {
+      const t = snippetTemplates.find(s => s.id === e.target.value);
+      if (t) insertIntoNote(t.body || '');
+      e.target.value = '';
+    });
 
     async function loadCase() {
       const { data, error } = await supabase
