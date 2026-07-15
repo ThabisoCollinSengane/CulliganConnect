@@ -67,6 +67,22 @@
       </div>
 
       <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">Interaction types</h3>
+          <form class="inline-add" data-table="interaction_types" data-fields="name">
+            <div style="display:flex; gap:8px; align-items:flex-end;">
+              <div><label style="margin-top:0;">Name</label><input name="name" required style="width:220px;" /></div>
+              <button class="btn" type="submit">Add</button>
+            </div>
+          </form>
+        </div>
+        <p class="hint" style="margin:-6px 0 10px;">Categories agents pick from when logging a non-case customer contact (swap, enquiry, account update…). Deactivate rather than delete to keep old logs intact.</p>
+        <table><thead><tr><th>Name</th><th>Status</th><th></th></tr></thead>
+          <tbody id="interaction_types-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
         <h3>Service centres (depots)</h3>
         <p class="hint">Where escalations get routed. Seeded from the UK depot directory.</p>
         <table>
@@ -140,6 +156,7 @@
       await Promise.all([
         loadSimpleTable('departments', ['name', 'description']),
         loadSimpleTable('case_types', ['name']),
+        loadSimpleTable('interaction_types', ['name']),
         loadServiceCentres(),
         loadEscalationReasons(),
         loadEodSettings(),

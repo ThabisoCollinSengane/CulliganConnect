@@ -175,6 +175,12 @@
         <h3>History</h3>
         <div id="history-list"></div>
       </div>
+
+      <div class="card hidden" id="account-interactions-card">
+        <h3 style="margin:0 0 4px;">📇 Recent interactions — this account</h3>
+        <p class="hint" style="margin:0 0 8px;">Non-case contacts logged against this customer's account by anyone on the team.</p>
+        <div id="account-interactions-list"></div>
+      </div>
     </main>
   </div>
 
@@ -880,6 +886,33 @@
       }
     }
 
+    // Shows non-case contacts logged against this case's account number, so an
+    // agent picking up the case sees the customer's recent history at a glance.
+    async function loadAccountInteractions() {
+      const account = currentCase?.account_number;
+      const card = document.getElementById('account-interactions-card');
+      if (!account) { card.classList.add('hidden'); return; }
+
+      const { data, error } = await supabase
+        .from('customer_interactions')
+        .select('id, notes, created_at, interaction_types(name), agent:profiles!customer_interactions_agent_id_fkey(full_name)')
+        .eq('account_number', account)
+        .order('created_at', { ascending: false })
+        .limit(15);
+
+      const list = document.getElementById('account-interactions-list');
+      if (error) { card.classList.add('hidden'); return; }
+      if (!data || data.length === 0) { card.classList.add('hidden'); return; }
+
+      card.classList.remove('hidden');
+      list.innerHTML = data.map(r => `
+        <div style="padding:8px 0; border-bottom:1px solid var(--border);">
+          <span class="badge blue">${r.interaction_types?.name || 'Interaction'}</span>
+          ${r.notes ? ' ' + r.notes.replace(/[<>]/g, '') : ''}
+          <div class="hint">${r.agent?.full_name || 'Unknown'} · ${new Date(r.created_at).toLocaleString()}</div>
+        </div>`).join('');
+    }
+
     // ---- Init (runs last, so all handlers above are already bound) ----
     profile = await requireRole(['agent', 'admin']);
     if (!caseId) {
@@ -892,6 +925,7 @@
       await loadReminders();
       await loadHistory();
       await loadAttachments();
+      await loadAccountInteractions();
       initNoteDraft();
     }
   </script>

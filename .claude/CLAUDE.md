@@ -1864,3 +1864,47 @@ confirmed **zero** leaked rows; empty-data load scan of all four touched pages �
 no TDZ halt. One test-harness gotcha re-learned and noted here for next time: Playwright
 `addInitScript` given a **stringified** function never calls it — pass the seed as a serialized
 **arg** to a real function instead (this caused a false "nudge hidden" until fixed).
+
+---
+
+📇 v32 Update – Customer interaction tracking (non-case contacts) (2026-07-15)
+
+Second batch off the improvements list (#14–17): capture customer contacts that never become a case
+— swaps, quick enquiries, account updates — so per-agent workload and per-account contact history
+are no longer invisible.
+
+**Schema** (`20260715120000_customer_interactions.sql`): two new tables.
+- `interaction_types` — an admin-configurable lookup, modelled exactly on `case_types` (name unique,
+  `is_active`, team-readable, admins write). Seeded with Swap / General enquiry / Account update /
+  Delivery query / Complaint / Billing query. Deactivate rather than delete (FK is `on delete
+  restrict`) so historical logs keep their type (#16).
+- `customer_interactions` — `account_number`, `interaction_type_id` (NOT NULL), `notes`, optional
+  `case_id` (`on delete set null`), `agent_id`, `created_at`. **Team-readable** like `case_notes`
+  (admin reporting + the case page's cross-agent view both need it), agents insert/update/delete
+  only their own, admins all.
+
+**Agent quick-log** (`agent/index.html`): a "📇 Log interaction" button in the Quick actions card
+opens a modal — account number (with autocomplete `datalist` built from the agent's case accounts +
+any previously-logged interaction accounts, #15), type dropdown, notes, optional related-case
+select. **Batch logging** (#17): "+ Add to list" queues rows and one "Log N interactions" fires a
+single `.insert([...])`; a lone filled row submits directly without queuing. All user text is
+escaped before it hits the pending-list HTML.
+
+**Case page** (`agent/case.html`): a "📇 Recent interactions — this account" card lists non-case
+contacts logged against the same `account_number` by anyone, so whoever picks up the case sees the
+customer's recent history.
+
+**Admin config** (`admin/settings.html`): an "Interaction types" card reusing the existing generic
+`inline-add` + `loadSimpleTable` add/deactivate pattern (#16).
+
+**Admin reporting** (`admin/reports.html`): a self-contained "📇 Customer interactions" card with its
+own range selector (today/week/month/all) showing totals plus counts by agent, by type, and top 15
+accounts — deliberately independent of the agent-performance "Run" flow so the two don't entangle.
+
+Verified: Playwright mock-harness DOM tests — single-log fires a 1-row insert with type/account/case
+selects populated, batch-log queues two rows and fires a 2-row insert, the case page's interactions
+card renders seeded cross-agent data; RLS-simulated (rolled back) — agent inserts + reads
+team-wide and is **blocked** from adding an interaction type (caught, nothing leaked), admin adds a
+type and reads/inserts interactions; post-check confirmed **zero** leaked rows; empty-data load scan
+of all touched pages (agent index/case, admin settings/reports) — no console errors, no TDZ halt;
+Supabase security advisors show no new RLS gaps.
