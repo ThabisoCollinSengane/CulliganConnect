@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Knowledge base – Culligan X CustomConnect</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="drop">C</span> Culligan X CustomConnect</div>
+    <nav>
+      <a href="/agent/index.html">My Day</a>
+      <a href="/agent/cases.html">Cases</a>
+      <a href="/agent/templates.html">Templates</a>
+      <a href="/agent/kb.html" class="active">Knowledge</a>
+      <a href="/agent/settings.html">Settings</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/agent/index.html">My Day</a>
+      <a href="/agent/cases.html">All Cases</a>
+      <a href="/agent/templates.html">Templates</a>
+      <a href="/agent/kb.html" class="active">Knowledge</a>
+      <a href="/agent/settings.html">Settings</a>
+    </aside>
+
+    <main class="main">
+      <div class="card">
+        <h2 style="margin:0 0 4px;">📚 Knowledge base</h2>
+        <p class="hint" style="margin:0 0 14px;">Search how-tos and reference articles. Standard answers, one source of truth.</p>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <input id="kb-search" placeholder="Search articles…" style="flex:2; min-width:220px;" />
+          <select id="kb-category" style="flex:1; min-width:160px;"><option value="">All categories</option></select>
+          <select id="kb-tag" style="flex:1; min-width:160px;"><option value="">All tags</option></select>
+        </div>
+      </div>
+
+      <div id="kb-list-card" class="card">
+        <div id="kb-list"></div>
+      </div>
+
+      <div id="kb-detail-card" class="card hidden">
+        <button class="btn secondary" id="kb-back" style="margin-bottom:12px;">← Back to list</button>
+        <h2 id="kb-detail-title" style="margin:0 0 4px;"></h2>
+        <p class="hint" id="kb-detail-meta" style="margin:0 0 16px;"></p>
+        <div id="kb-detail-content" class="kb-content"></div>
+        <div id="kb-detail-attachments" style="margin-top:18px;"></div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { supabase } from '/js/supabaseClient.js';
+    import '/js/theme.js';
+    import { requireRole, signOut } from '/js/auth.js';
+    import { subscribeToNotifications } from '/js/notifications.js';
+    import { renderMarkdown } from '/js/markdown.js';
+
+    const profile = await requireRole(['agent', 'admin']);
+
+    if (profile) {
+      subscribeToNotifications(profile.id);
+      await loadFilters();
+      await loadArticles();
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => { e.preventDefault(); signOut(); });
+
+    function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+    document.getElementById('kb-search').addEventListener('input', debounce(loadArticles, 300));
+    document.getElementById('kb-category').addEventListener('change', loadArticles);
+    document.getElementById('kb-tag').addEventListener('change', loadArticles);
+    document.getElementById('kb-back').addEventListener('click', showList);
+
+    function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+    // Build the category + tag filters from every article's metadata.
+    async function loadFilters() {
+      const { data } = await supabase.from('kb_articles').select('category, tags');
+      const cats = new Set(), tags = new Set();
+      (data || []).forEach(a => { if (a.category) cats.add(a.category); (a.tags || []).forEach(t => tags.add(t)); });
+      document.getElementById('kb-category').innerHTML = '<option value="">All categories</option>' +
+        [...cats].sort().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      document.getElementById('kb-tag').innerHTML = '<option value="">All tags</option>' +
+        [...tags].sort().map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+    }
+
+    async function loadArticles() {
+      const term = document.getElementById('kb-search').value.trim();
+      const category = document.getElementById('kb-category').value;
+      const tag = document.getElementById('kb-tag').value;
+
+      let query = supabase.from('kb_articles')
+        .select('id, title, content, category, tags, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(100);
+      if (term) query = query.textSearch('search_vector', term, { type: 'websearch', config: 'english' });
+      if (category) query = query.eq('category', category);
+      if (tag) query = query.contains('tags', [tag]);
+
+      const { data, error } = await query;
+      const list = document.getElementById('kb-list');
+      if (error) { list.innerHTML = `<p class="error-text">${escapeHtml(error.message)}</p>`; return; }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="hint">No articles found. Try a different search, or ask your admin to add one.</p>';
+        return;
+      }
+
+      list.innerHTML = '';
+      for (const a of data) {
+        const snippet = (a.content || '').replace(/[#*`>-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 160);
+        const tagChips = (a.tags || []).map(t => `<span class="badge blue" style="margin-right:4px;">${escapeHtml(t)}</span>`).join('');
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:12px 0; border-bottom:1px solid var(--border); cursor:pointer;';
+        row.innerHTML = `
+          <div style="display:flex; justify-content:space-between; gap:10px; align-items:baseline;">
+            <strong>${escapeHtml(a.title)}</strong>
+            <span class="hint">${a.category ? escapeHtml(a.category) : ''}</span>
+          </div>
+          <div class="hint" style="margin:4px 0;">${escapeHtml(snippet)}${snippet.length === 160 ? '…' : ''}</div>
+          <div>${tagChips}</div>
+        `;
+        row.addEventListener('click', () => showArticle(a.id));
+        list.appendChild(row);
+      }
+    }
+
+    function showList() {
+      document.getElementById('kb-detail-card').classList.add('hidden');
+      document.getElementById('kb-list-card').classList.remove('hidden');
+      document.querySelector('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    async function showArticle(id) {
+      const { data: a, error } = await supabase.from('kb_articles')
+        .select('id, title, content, category, tags, updated_at, author:profiles!kb_articles_created_by_fkey(full_name)')
+        .eq('id', id).single();
+      if (error || !a) return;
+
+      document.getElementById('kb-detail-title').textContent = a.title;
+      document.getElementById('kb-detail-meta').textContent =
+        [a.category, a.author?.full_name ? `by ${a.author.full_name}` : null, `updated ${new Date(a.updated_at).toLocaleDateString()}`].filter(Boolean).join(' · ');
+      document.getElementById('kb-detail-content').innerHTML = renderMarkdown(a.content);
+
+      await loadArticleAttachments(id);
+
+      document.getElementById('kb-list-card').classList.add('hidden');
+      document.getElementById('kb-detail-card').classList.remove('hidden');
+      document.querySelector('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    async function loadArticleAttachments(articleId) {
+      const { data } = await supabase.from('kb_attachments')
+        .select('id, file_name, storage_path, size_bytes').eq('article_id', articleId).order('created_at');
+      const wrap = document.getElementById('kb-detail-attachments');
+      if (!data || data.length === 0) { wrap.innerHTML = ''; return; }
+      wrap.innerHTML = '<h4 style="margin:0 0 8px;">📎 Attachments</h4>' +
+        data.map(f => `<div style="padding:6px 0;"><a href="#" class="kb-file" data-path="${escapeHtml(f.storage_path)}">${escapeHtml(f.file_name)}</a> <span class="hint">${f.size_bytes ? Math.max(1, Math.round(f.size_bytes / 1024)) + ' KB' : ''}</span></div>`).join('');
+      wrap.querySelectorAll('.kb-file').forEach(el => el.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { data: signed, error } = await supabase.storage.from('kb-files').createSignedUrl(el.dataset.path, 300);
+        if (error || !signed?.signedUrl) { alert(error?.message || 'Could not open file.'); return; }
+        window.open(signed.signedUrl, '_blank');
+      }));
+    }
+  </script>
+</body>
+</html>
