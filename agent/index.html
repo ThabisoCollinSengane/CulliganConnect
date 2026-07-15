@@ -41,6 +41,22 @@
       </div>
 
       <div class="card">
+        <h3 style="margin:0 0 10px;">⚡ Quick actions</h3>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <a class="btn" href="/agent/cases.html?quick=1">+ Quick case</a>
+          <a class="btn secondary" href="/agent/cases.html#submission-history-card">📋 Submission history</a>
+          <a class="btn secondary" href="/agent/cases.html?focus=search">🔍 Search cases</a>
+          <button type="button" class="btn secondary" id="qa-log-calls">📞 Log calls</button>
+        </div>
+      </div>
+
+      <a class="card hidden" id="stale-nudge-card" href="/agent/cases.html?mine=1&stale=1"
+         style="display:block; text-decoration:none; color:inherit; border-left:4px solid var(--orange); background:var(--light-blue);">
+        <strong id="stale-nudge-text" style="color:var(--orange);"></strong>
+        <span class="hint"> — tap to review and follow up before customers chase them.</span>
+      </a>
+
+      <div class="card">
         <div style="display:flex; gap:24px; align-items:center; flex-wrap:wrap;">
           <svg id="daily-meter" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="Daily target progress">
             <circle cx="80" cy="80" r="64" fill="none" stroke="var(--border)" stroke-width="14"/>
@@ -142,7 +158,7 @@
     import { supabase } from '/js/supabaseClient.js';
     import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
-    import { statusBadge, escalationCountdown, sortCasesByPriority } from '/js/caseHelpers.js';
+    import { statusBadge, escalationCountdown, sortCasesByPriority, staleCutoffIso, filterStaleCases } from '/js/caseHelpers.js';
     import { timeGreeting, motivationalLine } from '/js/greeting.js';
     import { subscribeToNotifications } from '/js/notifications.js';
     import { weightedScore, fetchEscalationStats, computeStreak, checkAndAwardBadges } from '/js/gamification.js';
@@ -177,6 +193,7 @@
         loadNotifications(),
         loadMyDay(),
         loadTeamEscalations(),
+        loadStaleNudge(),
         loadTodayMood(),
         loadCallsToday(),
         loadMiniLeaderboard(),
@@ -184,6 +201,48 @@
         loadStreakAndBadges(),
         loadActivityFeed(),
       ]);
+    }
+
+    // Quick action: jump to the calls card on this page and drop focus in the
+    // input, rather than making the agent scroll for it.
+    document.getElementById('qa-log-calls').addEventListener('click', () => {
+      document.getElementById('calls-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('calls-amount').focus();
+    });
+
+    // Proactive nudge: how many of my open cases have gone quiet for 48h+ (no
+    // case-row change and no note in that window). Uses the same definition as
+    // the Cases page's ?stale=1 filter, so the count and that list agree.
+    async function loadStaleNudge() {
+      const { data: openCases } = await supabase
+        .from('cases')
+        .select('id, status, updated_at, created_at')
+        .eq('assigned_to', profile.id)
+        .not('status', 'in', '("closed","resolved")');
+
+      const card = document.getElementById('stale-nudge-card');
+      if (!openCases || openCases.length === 0) {
+        card.classList.add('hidden');
+        return;
+      }
+
+      // Only need notes newer than the cutoff — a small set — to rule out
+      // cases that have had recent note activity without a status change.
+      const { data: recentNotes } = await supabase
+        .from('case_notes')
+        .select('case_id')
+        .in('case_id', openCases.map(c => c.id))
+        .gte('created_at', staleCutoffIso());
+      const recentlyNoted = new Set((recentNotes || []).map(n => n.case_id));
+
+      const staleCount = filterStaleCases(openCases, recentlyNoted).length;
+      if (staleCount === 0) {
+        card.classList.add('hidden');
+        return;
+      }
+      document.getElementById('stale-nudge-text').textContent =
+        `⚠️ You have ${staleCount} case${staleCount === 1 ? '' : 's'} with no activity for 48+ hours`;
+      card.classList.remove('hidden');
     }
 
     async function loadStreakAndBadges() {

@@ -57,8 +57,13 @@
         </div>
         <div class="toolbar" id="bulk-toolbar" style="background:var(--light-blue); padding:10px 14px; border-radius:8px; margin-bottom:12px;">
           <span class="hint"><span id="selected-count">0</span> selected</span>
-          <button class="btn secondary" id="bulk-delete-btn" style="color:var(--red, #c0392b);">Delete selected</button>
+          <div style="display:flex; gap:8px;">
+            <button class="btn secondary" id="bulk-close-btn" style="color:var(--green);">✅ Close selected</button>
+            <button class="btn secondary" id="bulk-delete-btn" style="color:var(--red, #c0392b);">Delete selected</button>
+          </div>
         </div>
+
+        <p class="hint hidden" id="stale-banner" style="background:var(--light-blue); border-left:4px solid var(--orange); border-radius:6px; padding:8px 12px; margin-bottom:12px; font-weight:600;"></p>
 
         <table id="cases-table">
           <thead><tr><th><input type="checkbox" id="select-all" style="width:auto;" /></th><th>Case #</th><th>Account #</th><th>Customer</th><th>Type</th><th>Status</th><th>Escalation</th><th>Assigned to</th></tr></thead>
@@ -66,11 +71,11 @@
         </table>
       </div>
 
-      <div class="card">
+      <div class="card" id="submission-history-card">
         <h3 style="margin:0 0 4px;">📋 My submission history</h3>
         <p class="hint" style="margin:0 0 10px;">Every case you've submitted — quick or full — so you can always come back and review or revisit one.</p>
         <table id="submission-history-table">
-          <thead><tr><th>Case #</th><th>Type</th><th>Status</th><th>Submitted</th></tr></thead>
+          <thead><tr><th>Case #</th><th>Type</th><th>Status</th><th>Submitted</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -143,14 +148,19 @@
     import { supabase } from '/js/supabaseClient.js';
     import '/js/theme.js';
     import { requireRole, signOut } from '/js/auth.js';
-    import { statusBadge, escalationCountdown, sortCasesByPriority } from '/js/caseHelpers.js';
+    import { statusBadge, escalationCountdown, sortCasesByPriority, staleCutoffIso, filterStaleCases } from '/js/caseHelpers.js';
     import { subscribeToNotifications } from '/js/notifications.js';
 
     const profile = await requireRole(['agent', 'admin']);
     let caseTypes = [];
 
-    // Dashboard stat tiles deep-link here with preset filters, e.g. ?status=escalated&mine=1.
+    // Dashboard stat tiles + the My Day quick-actions/stale nudge deep-link here
+    // with preset filters, e.g. ?status=escalated&mine=1, ?stale=1, ?quick=1.
     const params = new URLSearchParams(window.location.search);
+    // ?stale=1 (from the My Day nudge) shows only the agent's own cases that
+    // have gone quiet for 48h+ — force "my cases" and filter after fetch.
+    const staleMode = params.get('stale') === '1';
+    if (staleMode) document.getElementById('mine-filter').value = 'mine';
     if (params.get('status')) document.getElementById('status-filter').value = params.get('status');
     if (params.get('mine') === '0' || params.get('mine') === 'all') document.getElementById('mine-filter').value = 'all';
 
@@ -158,6 +168,10 @@
       subscribeToNotifications(profile.id);
       await loadCaseTypes();
       await Promise.all([loadCases(), loadSubmissionHistory()]);
+      // ?quick=1 opens the quick-submission modal straight away; ?focus=search
+      // drops the cursor in the search box — both driven from My Day shortcuts.
+      if (params.get('quick') === '1') document.getElementById('quick-modal-backdrop').classList.remove('hidden');
+      if (params.get('focus') === 'search') document.getElementById('search-input').focus();
     }
 
     function showToast(html, { color = 'var(--green)', ms = 4000 } = {}) {
@@ -229,7 +243,7 @@
 
       let query = supabase
         .from('cases')
-        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, assigned_to, priority, sla_date, created_at, case_types(name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
+        .select('id, case_number, account_number, customer_name, status, escalation_expires_at, assigned_to, priority, sla_date, created_at, updated_at, case_types(name), assigned_agent:profiles!cases_assigned_to_fkey(full_name)')
         .order('created_at', { ascending: false })
         .limit(100);
 
@@ -255,15 +269,30 @@
       tbody.innerHTML = '';
 
       if (error) {
-        tbody.innerHTML = `<tr><td colspan="7" class="error-text">${error.message}</td></tr>`;
-        return;
-      }
-      if (!data || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="hint">No cases found.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="8" class="error-text">${error.message}</td></tr>`;
         return;
       }
 
-      for (const c of sortCasesByPriority(data)) {
+      // ?stale=1: keep only cases that have gone quiet for 48h+ (no case-row
+      // change and no note in that window). Matches the My Day nudge's count.
+      let rows = data || [];
+      if (staleMode && rows.length) {
+        const { data: recentNotes } = await supabase.from('case_notes')
+          .select('case_id').in('case_id', rows.map(c => c.id)).gte('created_at', staleCutoffIso());
+        const recentlyNoted = new Set((recentNotes || []).map(n => n.case_id));
+        rows = filterStaleCases(rows, recentlyNoted);
+      }
+
+      const staleBanner = document.getElementById('stale-banner');
+      staleBanner.classList.toggle('hidden', !staleMode);
+      if (staleMode) staleBanner.textContent = `⚠️ Showing ${rows.length} of your case(s) with no activity for 48h+.`;
+
+      if (!rows || rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="hint">${staleMode ? 'No stale cases — you\'re on top of everything. 🎉' : 'No cases found.'}</td></tr>`;
+        return;
+      }
+
+      for (const c of sortCasesByPriority(rows)) {
         const countdown = escalationCountdown(c.escalation_expires_at);
         const escalationCell = countdown
           ? `<span class="badge ${countdown.className}">${countdown.label}</span>`
@@ -301,6 +330,23 @@
       updateSelectedCount();
     });
 
+    // Close everything selected in one go — end-of-shift housekeeping without
+    // opening each case. Only the agent's own rows carry a checkbox, so RLS
+    // already scopes this to cases they're allowed to close. Each UPDATE runs
+    // the status trigger, so closed_at/closed_by/stats are stamped correctly.
+    document.getElementById('bulk-close-btn').addEventListener('click', async () => {
+      const ids = Array.from(document.querySelectorAll('.row-select:checked')).map(cb => cb.dataset.id);
+      if (ids.length === 0) return;
+      if (!confirm(`Close ${ids.length} case(s) assigned to you?`)) return;
+
+      const { data: updated, error } = await supabase.from('cases')
+        .update({ status: 'closed' }).in('id', ids).select('id');
+      if (error) { alert(error.message); return; }
+      document.getElementById('select-all').checked = false;
+      await Promise.all([loadCases(), loadSubmissionHistory()]);
+      showToast(`<strong>✅ ${updated?.length || 0} case(s) closed</strong>`);
+    });
+
     document.getElementById('bulk-delete-btn').addEventListener('click', async () => {
       const ids = Array.from(document.querySelectorAll('.row-select:checked')).map(cb => cb.dataset.id);
       if (ids.length === 0) return;
@@ -325,15 +371,16 @@
       tbody.innerHTML = '';
 
       if (error) {
-        tbody.innerHTML = `<tr><td colspan="4" class="error-text">${error.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="error-text">${error.message}</td></tr>`;
         return;
       }
       if (!data || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="hint">Nothing submitted yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="hint">Nothing submitted yet.</td></tr>';
         return;
       }
 
       for (const c of data) {
+        const isOpen = c.status !== 'closed' && c.status !== 'resolved';
         const tr = document.createElement('tr');
         tr.style.cursor = 'pointer';
         tr.innerHTML = `
@@ -341,7 +388,26 @@
           <td>${c.case_types?.name || '—'}</td>
           <td>${statusBadge(c.status)}</td>
           <td class="hint">${new Date(c.created_at).toLocaleString()}</td>
+          <td>${isOpen ? `<button class="btn secondary quick-close-btn" data-id="${c.id}" data-num="${c.case_number}" style="padding:2px 10px; color:var(--green);">Close</button>` : ''}</td>
         `;
+        // The Close button closes the case straight from the list — one click
+        // for a quick submission that's already resolved in Salesforce.
+        tr.querySelector('.quick-close-btn')?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const btn = e.currentTarget;
+          if (!confirm(`Close case ${btn.dataset.num}?`)) return;
+          btn.disabled = true;
+          const { data: updated, error: closeErr } = await supabase.from('cases')
+            .update({ status: 'closed' }).eq('id', btn.dataset.id).select('id');
+          if (closeErr) { alert(closeErr.message); btn.disabled = false; return; }
+          if (!updated || updated.length === 0) {
+            alert('You can only close cases assigned to you, or any escalated case.');
+            btn.disabled = false;
+            return;
+          }
+          await Promise.all([loadCases(), loadSubmissionHistory()]);
+          showToast(`<strong>✅ Case ${btn.dataset.num} closed</strong>`);
+        });
         tr.addEventListener('click', () => {
           window.location.href = `/agent/case.html?id=${c.id}`;
         });
