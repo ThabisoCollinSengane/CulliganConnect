@@ -47,6 +47,40 @@
           <a class="btn secondary" href="/agent/cases.html#submission-history-card">📋 Submission history</a>
           <a class="btn secondary" href="/agent/cases.html?focus=search">🔍 Search cases</a>
           <button type="button" class="btn secondary" id="qa-log-calls">📞 Log calls</button>
+          <button type="button" class="btn secondary" id="qa-log-interaction">📇 Log interaction</button>
+        </div>
+      </div>
+
+      <div class="modal-backdrop hidden" id="interaction-modal-backdrop">
+        <div class="modal" style="max-width:640px;">
+          <h3>📇 Log customer interaction</h3>
+          <p class="hint" style="margin-top:-6px;">Record a contact that didn't become a case — a swap, a quick enquiry, an account update. Build up several and submit them together.</p>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 14px;">
+            <div class="form-row">
+              <label>Account number</label>
+              <input id="ci-account" list="ci-account-list" placeholder="Start typing…" />
+              <datalist id="ci-account-list"></datalist>
+            </div>
+            <div class="form-row">
+              <label>Interaction type</label>
+              <select id="ci-type"></select>
+            </div>
+          </div>
+          <div class="form-row"><label>Notes (optional)</label><input id="ci-notes" placeholder="What was the contact about?" /></div>
+          <div class="form-row">
+            <label>Related case (optional)</label>
+            <select id="ci-case"><option value="">— none —</option></select>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center; margin-top:6px;">
+            <button type="button" class="btn secondary" id="ci-add-row">+ Add to list</button>
+            <span class="hint" id="ci-pending-hint"></span>
+          </div>
+          <div id="ci-pending-list" style="margin-top:10px;"></div>
+          <p class="error-text hidden" id="ci-error"></p>
+          <div class="modal-actions">
+            <button type="button" class="btn secondary" id="ci-cancel">Cancel</button>
+            <button type="button" class="btn" id="ci-submit">Log interaction</button>
+          </div>
         </div>
       </div>
 
@@ -208,6 +242,136 @@
     document.getElementById('qa-log-calls').addEventListener('click', () => {
       document.getElementById('calls-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
       document.getElementById('calls-amount').focus();
+    });
+
+    // ---- Customer interaction quick-log (non-case contacts) ----
+    let interactionTypes = [];
+    let interactionMetaLoaded = false;
+    let pendingInteractions = [];
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    async function loadInteractionMeta() {
+      if (interactionMetaLoaded) return;
+      const [{ data: types }, { data: cases }, { data: ciAccounts }] = await Promise.all([
+        supabase.from('interaction_types').select('id, name').eq('is_active', true).order('name'),
+        supabase.from('cases').select('id, case_number, account_number').eq('assigned_to', profile.id).order('created_at', { ascending: false }).limit(100),
+        supabase.from('customer_interactions').select('account_number').not('account_number', 'is', null).limit(500),
+      ]);
+      interactionTypes = types || [];
+      document.getElementById('ci-type').innerHTML = interactionTypes.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+      document.getElementById('ci-case').innerHTML = '<option value="">— none —</option>' +
+        (cases || []).map(c => `<option value="${c.id}" data-num="${escapeHtml(c.case_number)}">${escapeHtml(c.case_number)}${c.account_number ? ' · ' + escapeHtml(c.account_number) : ''}</option>`).join('');
+      // Account autocomplete: distinct account numbers from this agent's cases + any logged interactions.
+      const accounts = new Set();
+      (cases || []).forEach(c => c.account_number && accounts.add(c.account_number));
+      (ciAccounts || []).forEach(r => r.account_number && accounts.add(r.account_number));
+      document.getElementById('ci-account-list').innerHTML = [...accounts].sort().map(a => `<option value="${escapeHtml(a)}"></option>`).join('');
+      interactionMetaLoaded = true;
+    }
+
+    function resetInteractionRow() {
+      document.getElementById('ci-account').value = '';
+      document.getElementById('ci-notes').value = '';
+      document.getElementById('ci-case').value = '';
+      if (interactionTypes.length) document.getElementById('ci-type').selectedIndex = 0;
+    }
+
+    function currentInteractionRow() {
+      const typeSel = document.getElementById('ci-type');
+      const typeId = typeSel.value;
+      if (!typeId) return null;
+      const caseSel = document.getElementById('ci-case');
+      return {
+        account_number: document.getElementById('ci-account').value.trim() || null,
+        interaction_type_id: typeId,
+        type_name: typeSel.options[typeSel.selectedIndex]?.textContent || '',
+        notes: document.getElementById('ci-notes').value.trim() || null,
+        case_id: caseSel.value || null,
+        case_number: caseSel.value ? (caseSel.options[caseSel.selectedIndex]?.dataset.num || '') : '',
+      };
+    }
+
+    function renderPendingInteractions() {
+      const list = document.getElementById('ci-pending-list');
+      const hint = document.getElementById('ci-pending-hint');
+      list.innerHTML = pendingInteractions.map((r, i) => `
+        <div style="display:flex; justify-content:space-between; gap:10px; align-items:center; background:var(--light-blue); border-radius:6px; padding:6px 10px; margin-bottom:6px;">
+          <span><strong>${escapeHtml(r.type_name)}</strong>${r.account_number ? ' · ' + escapeHtml(r.account_number) : ''}${r.notes ? ' — ' + escapeHtml(r.notes) : ''}${r.case_number ? ' <span class="hint">(case ' + escapeHtml(r.case_number) + ')</span>' : ''}</span>
+          <button type="button" class="btn secondary ci-remove-row" data-i="${i}" style="padding:2px 10px;">✕</button>
+        </div>`).join('');
+      list.querySelectorAll('.ci-remove-row').forEach(btn => btn.addEventListener('click', () => {
+        pendingInteractions.splice(Number(btn.dataset.i), 1);
+        renderPendingInteractions();
+      }));
+      hint.textContent = pendingInteractions.length ? `${pendingInteractions.length} queued — submit adds all at once.` : '';
+      document.getElementById('ci-submit').textContent = pendingInteractions.length
+        ? `Log ${pendingInteractions.length + (currentInteractionRowHasContent() ? 1 : 0)} interactions`
+        : 'Log interaction';
+    }
+
+    function currentInteractionRowHasContent() {
+      return !!(document.getElementById('ci-account').value.trim() || document.getElementById('ci-notes').value.trim());
+    }
+
+    const interactionModal = document.getElementById('interaction-modal-backdrop');
+    document.getElementById('qa-log-interaction').addEventListener('click', async () => {
+      pendingInteractions = [];
+      renderPendingInteractions();
+      await loadInteractionMeta();
+      resetInteractionRow();
+      document.getElementById('ci-error').classList.add('hidden');
+      interactionModal.classList.remove('hidden');
+      document.getElementById('ci-account').focus();
+    });
+    document.getElementById('ci-cancel').addEventListener('click', () => interactionModal.classList.add('hidden'));
+    document.getElementById('ci-account').addEventListener('input', renderPendingInteractions);
+    document.getElementById('ci-notes').addEventListener('input', renderPendingInteractions);
+
+    document.getElementById('ci-add-row').addEventListener('click', () => {
+      const row = currentInteractionRow();
+      if (!row) return;
+      pendingInteractions.push(row);
+      resetInteractionRow();
+      renderPendingInteractions();
+      document.getElementById('ci-account').focus();
+    });
+
+    document.getElementById('ci-submit').addEventListener('click', async () => {
+      const errorEl = document.getElementById('ci-error');
+      errorEl.classList.add('hidden');
+      const rows = [...pendingInteractions];
+      // Include the current row too if it hasn't been "added" but has content
+      // (or if it's the only thing being logged), so nothing is silently lost.
+      const cur = currentInteractionRow();
+      if (cur && (rows.length === 0 || currentInteractionRowHasContent())) rows.push(cur);
+      if (rows.length === 0) {
+        errorEl.textContent = 'Pick a type and add at least one interaction.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      const submitBtn = document.getElementById('ci-submit');
+      submitBtn.disabled = true;
+      const payload = rows.map(r => ({
+        account_number: r.account_number,
+        interaction_type_id: r.interaction_type_id,
+        notes: r.notes,
+        case_id: r.case_id,
+        agent_id: profile.id,
+      }));
+      const { error } = await supabase.from('customer_interactions').insert(payload);
+      submitBtn.disabled = false;
+      if (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      interactionModal.classList.add('hidden');
+      pendingInteractions = [];
+      resetInteractionRow();
+      showToast(`<strong>✅ ${payload.length} interaction${payload.length === 1 ? '' : 's'} logged</strong>`, { color: 'var(--green)' });
     });
 
     // Proactive nudge: how many of my open cases have gone quiet for 48h+ (no

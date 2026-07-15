@@ -117,6 +117,34 @@
         <textarea id="email-output" rows="18" readonly style="font-family: ui-monospace, monospace; font-size: 0.85rem;"></textarea>
         <p class="success-text hidden" id="copy-success">Copied to clipboard.</p>
       </div>
+
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">📇 Customer interactions</h3>
+          <select id="ci-range" style="width:160px;">
+            <option value="today">Today</option>
+            <option value="week" selected>This week</option>
+            <option value="month">This month</option>
+            <option value="all">All time</option>
+          </select>
+        </div>
+        <p class="hint">Non-case contacts (swaps, enquiries, account updates) — total workload not captured by cases.</p>
+        <p style="font-weight:600; margin:10px 0;" id="ci-total">—</p>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:20px;">
+          <div>
+            <h4 style="margin:0 0 8px;">By agent</h4>
+            <table id="ci-by-agent-table"><thead><tr><th>Agent</th><th>Interactions</th></tr></thead><tbody></tbody></table>
+          </div>
+          <div>
+            <h4 style="margin:0 0 8px;">By type</h4>
+            <table id="ci-by-type-table"><thead><tr><th>Type</th><th>Interactions</th></tr></thead><tbody></tbody></table>
+          </div>
+          <div>
+            <h4 style="margin:0 0 8px;">Top accounts</h4>
+            <table id="ci-by-account-table"><thead><tr><th>Account #</th><th>Interactions</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
 
@@ -138,6 +166,50 @@
       subscribeToNotifications(profile.id);
       await Promise.all([loadDepartments(), loadWaves()]);
       await loadTeamTrends();
+      await loadInteractionReport();
+    }
+
+    // ---- Customer interactions report (independent of the agent-performance run) ----
+    document.getElementById('ci-range').addEventListener('change', loadInteractionReport);
+
+    async function loadInteractionReport() {
+      const preset = document.getElementById('ci-range').value;
+      let fromIso = null;
+      const now = new Date();
+      if (preset === 'today') { const d = new Date(now); d.setHours(0, 0, 0, 0); fromIso = d.toISOString(); }
+      else if (preset === 'week') { const d = new Date(now); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); d.setHours(0, 0, 0, 0); fromIso = d.toISOString(); }
+      else if (preset === 'month') { fromIso = new Date(now.getFullYear(), now.getMonth(), 1).toISOString(); }
+
+      let query = supabase.from('customer_interactions')
+        .select('account_number, interaction_types(name), agent:profiles!customer_interactions_agent_id_fkey(full_name)')
+        .limit(5000);
+      if (fromIso) query = query.gte('created_at', fromIso);
+      const { data, error } = await query;
+
+      const byAgent = document.querySelector('#ci-by-agent-table tbody');
+      const byType = document.querySelector('#ci-by-type-table tbody');
+      const byAccount = document.querySelector('#ci-by-account-table tbody');
+      if (error) {
+        document.getElementById('ci-total').textContent = error.message;
+        return;
+      }
+      const rows = data || [];
+      document.getElementById('ci-total').textContent = `${rows.length} interaction${rows.length === 1 ? '' : 's'} logged`;
+
+      const tally = (keyFn) => {
+        const m = new Map();
+        for (const r of rows) { const k = keyFn(r); if (k == null) continue; m.set(k, (m.get(k) || 0) + 1); }
+        return [...m.entries()].sort((a, b) => b[1] - a[1]);
+      };
+      const renderRows = (tbody, entries, emptyLabel, limit) => {
+        const list = limit ? entries.slice(0, limit) : entries;
+        tbody.innerHTML = list.length
+          ? list.map(([k, n]) => `<td>${String(k).replace(/[<>]/g, '')}</td><td>${n}</td>`).map(c => `<tr>${c}</tr>`).join('')
+          : `<tr><td colspan="2" class="hint">${emptyLabel}</td></tr>`;
+      };
+      renderRows(byAgent, tally(r => r.agent?.full_name || 'Unknown'), 'No interactions in range.');
+      renderRows(byType, tally(r => r.interaction_types?.name || 'Unspecified'), 'No interactions in range.');
+      renderRows(byAccount, tally(r => r.account_number), 'No account numbers logged.', 15);
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
