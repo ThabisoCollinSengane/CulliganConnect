@@ -97,6 +97,10 @@
     if (profile) {
       subscribeToNotifications(profile.id);
       await loadArticles();
+      // Deep link from the Setup page's Quick Add / Manage Tags cards, so
+      // "open in full editor" lands directly on that article.
+      const editId = new URLSearchParams(window.location.search).get('edit');
+      if (editId) await openEditor(editId);
     }
 
     document.getElementById('logout-link').addEventListener('click', (e) => { e.preventDefault(); signOut(); });

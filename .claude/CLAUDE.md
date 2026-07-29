@@ -2039,3 +2039,58 @@ up; the dropdown resets to the placeholder after each insert. Verified with a Pl
 populated, body inserted after existing text on a new line, dropdown resets, no errors) and the
 empty-data load scan. This closes out every item on the improvements list except the flagged
 `admin/reports.html` → `daily_stats` reporting follow-up.
+
+---
+
+🔎 v37 Update – Knowledge base: instant search, clickable #tags, and Setup-page authoring
+(2026-07-15)
+
+User ask: search the KB without paging through the browse list, clickable #tags that jump straight
+to content, and a fast way for admins to add tagged info + manage tags from the Setup page.
+Frontend-only — reuses `kb_articles`/`kb_attachments` and their existing RLS as-is, no migration.
+
+**Deep-linking on `agent/kb.html`.** The page now reads `?article=`, `?tag=`, and `?q=` on load:
+`?article=<id>` skips the browse list entirely and opens that article's detail view directly;
+`?tag=`/`?q=` prefill the tag select / search box before running the query. Opening an article also
+`history.replaceState`s the URL to include `?article=<id>` (and going back to the list strips it), so
+the article view is bookmarkable/shareable/refresh-safe, not just a client-side toggle.
+
+**Clickable #tag chips.** Tags render as `#tag` buttons — in both the article list rows and (new) the
+open-article detail view, which previously showed no tags at all. Clicking one sets the tag filter
+and returns to the (now-filtered) list; `stopPropagation` keeps it from also opening the article
+whose row it's inside.
+
+**My Day quick-search** (`agent/index.html`, new card, top of the page): a debounced live-search box
+— type free text to full-text search, or lead with `#` to search by tag — showing up to 6 results
+(title, category, tags) that link straight to `/agent/kb.html?article=<id>`. Enter with no result
+selected goes to the full filtered list (`?q=` or `?tag=`) instead. This is the actual "without
+toggling through pages" ask: an agent never has to open the Knowledge page's browse view just to
+check one thing.
+
+**Setup-page authoring** (`admin/settings.html`, two new cards):
+- **Knowledge base — quick add**: title, optional category, comma-separated tags, and a content box
+  → inserts straight into `kb_articles` (same table the full editor uses), searchable for agents the
+  moment it's saved (the `search_vector` column is `generated always as ... stored`, so no extra step
+  is needed). Lists the 10 most recently updated articles with an **Open** link to
+  `admin/kb.html?edit=<id>` (new query-param support there) and Delete.
+- **Manage knowledge base tags**: since `kb_articles.tags` is a plain `text[]` — not a lookup table —
+  "rename/delete a tag" means rewriting the array on every article that has it. Done client-side:
+  fetch the id/tags of just the affected articles (`.in('id', articleIds)`, scoped from an aggregated
+  tag → article-id map built from one `select id, tags` over all articles), compute the new array
+  per row (`array_replace`-equivalent with a `Set` dedupe for rename, filter for delete), then update
+  each row. No RPC/migration needed — the existing `admins_write_kb_articles ... for all` policy
+  already covers it.
+
+Verified: Playwright mock-harness DOM tests — `?article=` opens the detail view directly with tag
+chips rendered, clicking a list tag chip sets the filter and stays on the list, `?tag=` prefills the
+select, the My Day quick-search returns and links results correctly, admin quick-add fires the
+expected insert and the saved message shows. One mock-harness limitation re-hit here (documented
+before): the mock ignores `.in()`/filter chains entirely, so the tag-delete DOM test showed both
+seeded articles being touched — **not a real bug**; verified against the actual database instead.
+RLS-simulated (rolled back) as a real admin: seeded two articles, one with the target tag and one
+without, ran the exact delete/rename logic through real `= any(...)` filtering — only the correctly-
+scoped article changed, the other was untouched; rename-into-an-existing-tag correctly deduped
+instead of producing a duplicate. Also confirmed (rolled back) that an agent's identical update is
+silently blocked by RLS (0 rows affected) as a defense-in-depth check, even though the Setup page
+itself is admin-only. Post-check confirmed **zero** leaked rows both times. Empty-data load scan of
+all touched pages — clean, no TDZ halt.
