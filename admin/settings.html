@@ -85,6 +85,38 @@
       </div>
 
       <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">📚 Knowledge base — quick add</h3>
+          <a class="btn secondary" href="/admin/kb.html">Open full editor</a>
+        </div>
+        <p class="hint" style="margin:-6px 0 10px;">Fastest way to get something searchable for agents: a short title, a tag or two, and the info. It's saved as a normal Knowledge base article — searchable and tag-filterable on the agent Knowledge page the moment you save it.</p>
+        <form id="kb-quick-form">
+          <div style="display:grid; grid-template-columns:2fr 1fr; gap:0 14px;">
+            <div class="form-row"><label>Title</label><input id="kbq-title" required /></div>
+            <div class="form-row"><label>Category (optional)</label><input id="kbq-category" placeholder="e.g. Swaps" /></div>
+          </div>
+          <div class="form-row"><label>Tags (comma-separated)</label><input id="kbq-tags" placeholder="swap, process, depot" /></div>
+          <div class="form-row"><label>Information</label><textarea id="kbq-content" rows="5" placeholder="What should agents know?"></textarea></div>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button class="btn" type="submit">Save to Knowledge base</button>
+            <span class="success-text hidden" id="kbq-saved">✓ Saved — searchable now.</span>
+            <span class="error-text hidden" id="kbq-error"></span>
+          </div>
+        </form>
+        <table style="margin-top:16px;"><thead><tr><th>Title</th><th>Tags</th><th>Updated</th><th></th></tr></thead>
+          <tbody id="kb-recent-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 4px;">🏷️ Manage knowledge base tags</h3>
+        <p class="hint" style="margin:0 0 10px;">Rename a tag everywhere it's used, or remove it from every article. Changes apply immediately to what agents see and search.</p>
+        <table><thead><tr><th>Tag</th><th>Used on</th><th></th></tr></thead>
+          <tbody id="kb-tags-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
         <h3>Service centres (depots)</h3>
         <p class="hint">Where escalations get routed. Seeded from the UK depot directory.</p>
         <table>
@@ -162,6 +194,8 @@
         loadServiceCentres(),
         loadEscalationReasons(),
         loadEodSettings(),
+        loadKbRecent(),
+        loadKbTags(),
       ]);
     }
 
@@ -169,6 +203,8 @@
       e.preventDefault();
       signOut();
     });
+
+    function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
     document.querySelectorAll('form.inline-add').forEach(form => {
       form.addEventListener('submit', async (e) => {
@@ -310,6 +346,124 @@
       }
       successEl.classList.remove('hidden');
     });
+
+    // ---- Knowledge base: quick add ----
+    document.getElementById('kb-quick-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('kbq-error');
+      const savedEl = document.getElementById('kbq-saved');
+      errorEl.classList.add('hidden');
+      savedEl.classList.add('hidden');
+
+      const title = document.getElementById('kbq-title').value.trim();
+      if (!title) { errorEl.textContent = 'Title is required.'; errorEl.classList.remove('hidden'); return; }
+
+      const payload = {
+        title,
+        category: document.getElementById('kbq-category').value.trim() || null,
+        tags: document.getElementById('kbq-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+        content: document.getElementById('kbq-content').value,
+        created_by: profile.id,
+      };
+      const { error } = await supabase.from('kb_articles').insert(payload);
+      if (error) { errorEl.textContent = error.message; errorEl.classList.remove('hidden'); return; }
+
+      document.getElementById('kb-quick-form').reset();
+      savedEl.classList.remove('hidden');
+      setTimeout(() => savedEl.classList.add('hidden'), 3000);
+      await Promise.all([loadKbRecent(), loadKbTags()]);
+    });
+
+    async function loadKbRecent() {
+      const { data, error } = await supabase.from('kb_articles')
+        .select('id, title, tags, updated_at').order('updated_at', { ascending: false }).limit(10);
+      const tbody = document.getElementById('kb-recent-body');
+      tbody.innerHTML = '';
+      if (error) { tbody.innerHTML = `<tr><td colspan="4" class="error-text">${escapeHtml(error.message)}</td></tr>`; return; }
+      if (!data || data.length === 0) { tbody.innerHTML = '<tr><td colspan="4" class="hint">Nothing added yet.</td></tr>'; return; }
+
+      for (const a of data) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${escapeHtml(a.title)}</td>
+          <td>${(a.tags || []).map(t => `<span class="badge blue" style="margin-right:3px;">#${escapeHtml(t)}</span>`).join('') || '—'}</td>
+          <td class="hint">${new Date(a.updated_at).toLocaleDateString()}</td>
+          <td style="white-space:nowrap;">
+            <a class="btn secondary" style="padding:2px 10px;" href="/admin/kb.html?edit=${a.id}">Open</a>
+            <button class="btn secondary del-kb-btn" data-id="${a.id}" data-title="${escapeHtml(a.title)}" style="padding:2px 10px; color:var(--red, #c0392b);">Delete</button>
+          </td>`;
+        tr.querySelector('.del-kb-btn').addEventListener('click', async () => {
+          if (!confirm(`Delete "${a.title}"? This also removes its attachments.`)) return;
+          await supabase.from('kb_articles').delete().eq('id', a.id);
+          await Promise.all([loadKbRecent(), loadKbTags()]);
+        });
+        tbody.appendChild(tr);
+      }
+    }
+
+    // ---- Knowledge base: tag management ----
+    // kb_articles.tags is a plain text[] column (no separate tags table), so
+    // "rename/delete a tag" means rewriting the tags array on every article
+    // that uses it — done client-side since PostgREST can't run array_replace
+    // as part of a single update payload.
+    async function loadKbTags() {
+      const { data, error } = await supabase.from('kb_articles').select('id, tags');
+      const tbody = document.getElementById('kb-tags-body');
+      tbody.innerHTML = '';
+      if (error) { tbody.innerHTML = `<tr><td colspan="3" class="error-text">${escapeHtml(error.message)}</td></tr>`; return; }
+
+      const byTag = new Map();
+      for (const a of data || []) {
+        for (const t of a.tags || []) {
+          if (!byTag.has(t)) byTag.set(t, []);
+          byTag.get(t).push(a.id);
+        }
+      }
+      if (byTag.size === 0) { tbody.innerHTML = '<tr><td colspan="3" class="hint">No tags in use yet.</td></tr>'; return; }
+
+      for (const [tag, articleIds] of [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><span class="badge blue">#${escapeHtml(tag)}</span></td>
+          <td class="hint">${articleIds.length} article${articleIds.length === 1 ? '' : 's'}</td>
+          <td style="white-space:nowrap;">
+            <button class="btn secondary rename-tag-btn" style="padding:2px 10px;">Rename</button>
+            <button class="btn secondary delete-tag-btn" style="padding:2px 10px; color:var(--red, #c0392b);">Delete</button>
+          </td>`;
+        tr.querySelector('.rename-tag-btn').addEventListener('click', () => renameTag(tag, articleIds));
+        tr.querySelector('.delete-tag-btn').addEventListener('click', () => deleteTag(tag, articleIds));
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function fetchArticlesTags(articleIds) {
+      const { data } = await supabase.from('kb_articles').select('id, tags').in('id', articleIds);
+      return data || [];
+    }
+
+    async function renameTag(oldTag, articleIds) {
+      const newTag = prompt(`Rename tag "#${oldTag}" (used on ${articleIds.length} article(s)) to:`, oldTag);
+      if (!newTag || !newTag.trim() || newTag.trim() === oldTag) return;
+      const clean = newTag.trim();
+
+      const rows = await fetchArticlesTags(articleIds);
+      await Promise.all(rows.map(r => {
+        const next = [...new Set((r.tags || []).map(t => t === oldTag ? clean : t))];
+        return supabase.from('kb_articles').update({ tags: next }).eq('id', r.id);
+      }));
+      await Promise.all([loadKbTags(), loadKbRecent()]);
+    }
+
+    async function deleteTag(tag, articleIds) {
+      if (!confirm(`Remove tag "#${tag}" from ${articleIds.length} article(s)? This can't be undone.`)) return;
+
+      const rows = await fetchArticlesTags(articleIds);
+      await Promise.all(rows.map(r => {
+        const next = (r.tags || []).filter(t => t !== tag);
+        return supabase.from('kb_articles').update({ tags: next }).eq('id', r.id);
+      }));
+      await Promise.all([loadKbTags(), loadKbRecent()]);
+    }
   </script>
 </body>
 </html>

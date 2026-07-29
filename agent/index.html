@@ -42,6 +42,13 @@
         <a class="stat-link" href="/agent/cases.html?mine=1"><div class="stat-tile"><div class="value" id="stat-open">–</div><div class="label">Open cases assigned</div></div></a>
       </div>
 
+      <div class="card" style="position:relative;">
+        <h3 style="margin:0 0 10px;">📚 Search knowledge base</h3>
+        <input id="kbq-input" placeholder="Search articles, or type a #tag…" autocomplete="off" />
+        <div id="kbq-results" class="hidden"
+             style="position:absolute; left:16px; right:16px; top:74px; background:var(--white); border:1px solid var(--border); border-radius:8px; box-shadow:var(--shadow); z-index:20; max-height:340px; overflow-y:auto;"></div>
+      </div>
+
       <div class="card">
         <h3 style="margin:0 0 10px;">⚡ Quick actions</h3>
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
@@ -244,6 +251,61 @@
     document.getElementById('qa-log-calls').addEventListener('click', () => {
       document.getElementById('calls-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
       document.getElementById('calls-amount').focus();
+    });
+
+    // Knowledge base quick search — lets an agent search and jump straight to
+    // an article from My Day, without first navigating into the Knowledge
+    // page and browsing its list. A leading '#' searches by tag instead of
+    // free text, matching the #tag chips used throughout the KB pages.
+    function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+    const kbqInput = document.getElementById('kbq-input');
+    const kbqResults = document.getElementById('kbq-results');
+
+    async function runKbQuickSearch() {
+      const raw = kbqInput.value.trim();
+      if (raw.length < 2) { kbqResults.classList.add('hidden'); return; }
+
+      let query = supabase.from('kb_articles').select('id, title, category, tags').limit(6);
+      if (raw.startsWith('#')) {
+        query = query.contains('tags', [raw.slice(1)]);
+      } else {
+        query = query.textSearch('search_vector', raw, { type: 'websearch', config: 'english' });
+      }
+      const { data } = await query;
+
+      if (!data || data.length === 0) {
+        kbqResults.innerHTML = '<div class="hint" style="padding:12px 16px;">No matches. Press Enter to search the full Knowledge base.</div>';
+        kbqResults.classList.remove('hidden');
+        return;
+      }
+      kbqResults.innerHTML = data.map(a => `
+        <a href="/agent/kb.html?article=${a.id}" style="display:block; padding:10px 16px; border-bottom:1px solid var(--border); color:inherit; text-decoration:none;">
+          <strong>${escapeHtml(a.title)}</strong>
+          <span class="hint">${a.category ? ' · ' + escapeHtml(a.category) : ''}</span>
+          <div class="hint">${(a.tags || []).map(t => '#' + escapeHtml(t)).join(' ')}</div>
+        </a>
+      `).join('');
+      kbqResults.classList.remove('hidden');
+    }
+
+    kbqInput.addEventListener('input', debounce(runKbQuickSearch, 250));
+    kbqInput.addEventListener('focus', () => { if (kbqInput.value.trim().length >= 2) runKbQuickSearch(); });
+    kbqInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const raw = kbqInput.value.trim();
+        if (!raw) return;
+        window.location.href = raw.startsWith('#')
+          ? `/agent/kb.html?tag=${encodeURIComponent(raw.slice(1))}`
+          : `/agent/kb.html?q=${encodeURIComponent(raw)}`;
+      } else if (e.key === 'Escape') {
+        kbqResults.classList.add('hidden');
+      }
+    });
+    // Close the results dropdown on outside click, but let a click on a
+    // result link register first (mousedown fires before the blur/click).
+    document.addEventListener('click', (e) => {
+      if (!kbqResults.contains(e.target) && e.target !== kbqInput) kbqResults.classList.add('hidden');
     });
 
     // Auto-refresh the priority case list + team-escalations widget every 5
