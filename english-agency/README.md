@@ -21,7 +21,7 @@ Nothing gets sent, spent, registered or published without your approval.
 | Path | Contents |
 |---|---|
 | `research/` | R1, R2, R4, R5, R6 first passes · name shortlist · challenge memo |
-| `prospects/` | **`LEADS.md` (65 leads, first 12 to work, daily prospecting loop)** · `tracker.csv` (CRM v1) · `drafts/` (3 outreach templates, never auto-sent) |
+| `prospects/` | **`CONTACTS.md` + `contacts.csv` (13 orgs with named people & published phone/email, start here)** · **`LEADS.md` (65 leads, first 12 to work, daily prospecting loop)** · `tracker.csv` (CRM v1) · `drafts/` (3 outreach templates, never auto-sent) |
 | `ops/` | Business model recommendation · pricing calculator (xlsx) · team structure, roles, KPIs, shift model |
 | `ai-team/` | Blueprint + task-brief and research-report templates |
 | `docs/archive/` | HANDOVER v1 |
