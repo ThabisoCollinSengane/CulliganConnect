@@ -119,7 +119,7 @@ Do not sign a lease before Phase 3. A hub with no signed clients is just rent.
 | R1 | Platform terms (agencies/shared accounts) | **First pass done**: `research/R1-platform-terms.md` |
 | R4 | Pricing benchmarks: China adult/corporate, Vietnam/Thailand | **First pass done**: `research/R4-pricing-benchmarks.md`. Client-side rates still UNVERIFIED |
 | R6 | SA legal/compliance | **First pass done**: `research/R6-sa-legal-briefing.md` |
-| R2 | Demand map + named prospects | **First pass done**: `research/R2-asia-demand-map.md` (re-scoped to adults) |
+| R2 | Demand map + named prospects | **65 named leads in `prospects/LEADS.md` (8 Nov)**. **First pass done**: `research/R2-asia-demand-map.md` (re-scoped to adults) |
 | R5 | TEFL re-verification | **First pass done**: `research/R5-tefl-recheck.md` |
 | R13 | Client due diligence & payment protection | Not started (now more urgent; see China tax/withholding in CHALLENGE §2) |
 | R3, R7–R12 | Competitors, getting paid, hub costing, tutor supply, curriculum, schedule matrix, funding | Not started |
