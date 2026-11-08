@@ -1,0 +1,11 @@
+# Task brief — <ID / short title>
+- **Date:** 
+- **Requested by:** Owner
+- **Assigned to:** market-researcher | prospect-builder | ops-planner
+- **Goal (one sentence):**
+- **Scope (in / out):**
+- **Inputs to read first:** HANDOVER.md, research/…
+- **Definition of done:**
+- **Output file(s):**
+- **Approvals needed before any action:** (send / spend / register / publish — usually "none, draft only")
+- **Deadline:**
