@@ -5,6 +5,7 @@
 > is self-contained.
 
 ## START HERE FIRST
+0. **`ops/SALES-PLAYBOOK.md`**: viability verdict, how to approach each contact, scripts, objections, 90-day plan.
 0. **`ops/BUSINESS-MODEL-RECOMMENDATION.md`**: the recommended name, products, pricing and growth stages. Use it with `ops/pricing-calculator.xlsx` (change the blue cells).
 1. **`research/CHALLENGE-what-breaks.md`**: what is most likely to break, with the evidence that would settle each point.
 2. **`HANDOVER.md`** (v2): the plan of record.
