@@ -12,6 +12,7 @@ accountant and attorney.
 >   parallel. China K-12 is a hard BLOCKER. Employed hub tutors at R16,000 base. Client pricing US$12–14
 >   with an escalation schedule. Website **not** to be built yet (owner instruction).
 >   v1 is archived at `docs/archive/HANDOVER-v1.md`.
+> - **Claude's recommended business model + pricing calculator (8 Nov):** `ops/BUSINESS-MODEL-RECOMMENDATION.md`, `ops/pricing-calculator.xlsx`.
 > - **Claude's challenge to v2:** `research/CHALLENGE-what-breaks.md`. Read it before Phase 1.
 
 ---

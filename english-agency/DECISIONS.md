@@ -15,3 +15,6 @@
 | — | Add minimum-committed-hours, prepayment, tax gross-up and network clauses to client contracts | CHALLENGE §2, §4, §5 | Owner + attorney | **Open** |
 | — | Company name | Shortlist in research/NAMES.md (Claude: Clearline English) | Owner | **Open** |
 | — | Is R16,000 base final or partly per-hour? | HANDOVER v2 §11 | Owner | **Open** |
+| — | **Business model (Claude recommendation, 8 Nov):** solo start; sell small-group corporate programmes at US$32/group-hour, executive 1:1 at US$22, language-centre filler at US$14 floor, US$150 paid pilot; prepaid monthly + minimum hours; price lock 12 months then max(CPI+3%, 5%) | ops/BUSINESS-MODEL-RECOMMENDATION.md + ops/pricing-calculator.xlsx | Owner | **Open – owner to approve** |
+| — | First tutor part-time employed at R110/h with 40 h guaranteed minimum; convert to R16k full-time at ~110 signed h/month | Avoids salary ahead of demand (CHALLENGE §2) | Owner + attorney | **Open** |
+| — | Name: **Clearline English** (clearlineenglish.com available on 8 Nov lookup) | research/NAMES.md | Owner | **Open – owner to approve** |

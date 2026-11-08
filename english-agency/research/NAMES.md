@@ -19,6 +19,11 @@ needs **owner approval**.
 | 5 | **Coastline Language Services** | Durban coast | Neutral, corporate | Bland |
 | 6 | **Khuluma Business English** | isiZulu *khuluma* = "speak" | Strong story | "Kh" hard to say; less corporate |
 
+**Checks run 2026-11-08 (read-only, nothing reserved):** web search found no company named
+"Clearline English" (similar but different names exist: Lingu "Clear English", Clear English Coach,
+ClearBridge Language Solutions). Domain lookup: **clearlineenglish.com available**, clearline-english.com
+available, clearlinetutors.com available; **bridgewayenglish.com taken**. CIPC search still to do.
+
 **Claude's recommendation:** **Clearline English** (or Bridgeway English if taken). It sells exactly
 what HANDOVER §3 says the product is: clear, reliable lessons. Keep *Indlela*/*Thetha* as a brand
 story or internal programme name (e.g. the "Thetha Method" tutor standard).
